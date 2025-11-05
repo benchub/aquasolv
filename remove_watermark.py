@@ -70,7 +70,7 @@ def detect_watermark_mask(img_array, threshold=None):
     Detect the watermark region in the lower-right corner.
     The watermark has both bright pixels (sparkle) and dark pixels (shadows/outlines).
 
-    Returns a binary mask where True indicates watermark pixels.
+    Returns a tuple: (binary mask, is_white_on_dark_icon_pattern)
     """
     height, width = img_array.shape[:2]
 
@@ -89,6 +89,7 @@ def detect_watermark_mask(img_array, threshold=None):
 
     # Sample background from areas that should NOT contain the watermark
     # Sample from the edges, avoiding the center-right area where sparkle typically is
+    # Also avoid very dark/light borders by sampling from interior regions
     background_samples = []
 
     # Top-left corner (far from watermark)
@@ -101,48 +102,128 @@ def detect_watermark_mask(img_array, threshold=None):
     background_pixels = np.concatenate(background_samples)
     background_level = np.median(background_pixels)
 
+    # If background is extremely dark (<10) or bright (>245), likely sampling a border
+    # Try sampling from middle regions that avoid both borders and watermark
+    if background_level < 10 or background_level > 245:
+        print(f"Border detected in edge samples (level={background_level:.1f}), trying interior sampling...")
+
+        interior_samples = []
+        # Sample from middle strips (horizontally and vertically) that skip borders
+        # but stay away from the watermark center (typically 40-60 range)
+        # Top-middle strip (skip top border, middle columns)
+        interior_samples.append(corner_gray[0:15, 35:55].flatten())
+        # Left-middle strip (skip left border, middle rows)
+        interior_samples.append(corner_gray[35:55, 0:15].flatten())
+
+        interior_pixels = np.concatenate(interior_samples)
+
+        # Filter out extreme values (any remaining border pixels)
+        interior_filtered = interior_pixels[(interior_pixels > 20) & (interior_pixels < 240)]
+
+        if len(interior_filtered) > 50:
+            interior_level = np.median(interior_filtered)
+            # Use interior level if it's significantly different from edge level
+            if abs(interior_level - background_level) > 30:
+                print(f"Using interior background level: {interior_level:.1f} (edge was {background_level:.1f})")
+                background_level = interior_level
+
     # Create full image mask
     mask = np.zeros((height, width), dtype=bool)
 
     # Auto-adjust threshold if not provided
     if threshold is None:
-        # Try different thresholds to find one that detects 500-2000 pixels
-        # Detect brightened pixels (positive difference) - this is the standard case
+        # Try different thresholds to find one that detects 500-4000 pixels
+        # Try BOTH bright and dark watermark detection
         brightness_diff = corner_gray - background_level
 
         # Try thresholds from low to high to prefer capturing more of the watermark
         # (including faint anti-aliased edges)
         best_threshold = None
         best_count = 0
+        best_is_dark = False
 
         for test_threshold in [5, 10, 15, 20, 25, 30, 35, 40]:
-            test_mask = brightness_diff > test_threshold
-            test_mask = ndimage.binary_closing(test_mask, iterations=1)
+            # Try bright watermark (standard)
+            test_mask_bright = brightness_diff > test_threshold
+            test_mask_bright = ndimage.binary_closing(test_mask_bright, iterations=1)
+
+            # Try dark watermark (on light backgrounds)
+            test_mask_dark = brightness_diff < -test_threshold
+            test_mask_dark = ndimage.binary_closing(test_mask_dark, iterations=1)
 
             # Watermark is typically 20-75 pixels from edges
-            likely_region = np.zeros_like(test_mask)
+            likely_region = np.zeros_like(test_mask_bright)
             likely_region[20:75, 20:75] = True
-            test_mask = test_mask & likely_region
 
-            pixel_count = np.sum(test_mask)
+            test_mask_bright = test_mask_bright & likely_region
+            test_mask_dark = test_mask_dark & likely_region
+
+            pixel_count_bright = np.sum(test_mask_bright)
+            pixel_count_dark = np.sum(test_mask_dark)
 
             # Allow larger watermarks (up to 4000 pixels) to capture faint edges
-            if 500 <= pixel_count <= 4000:
+            if 500 <= pixel_count_bright <= 4000:
                 best_threshold = test_threshold
-                best_count = pixel_count
+                best_count = pixel_count_bright
+                best_is_dark = False
+                print(f"Auto-selected threshold: {threshold} ({best_count} pixels, BRIGHT)")
                 break  # Use the first (lowest) valid threshold
+            elif 500 <= pixel_count_dark <= 4000:
+                best_threshold = test_threshold
+                best_count = pixel_count_dark
+                best_is_dark = True
+                print(f"Auto-selected threshold: {threshold} ({best_count} pixels, DARK)")
+                break
 
         if best_threshold is not None:
             threshold = best_threshold
-            print(f"Auto-selected threshold: {threshold} ({best_count} pixels)")
+            if best_is_dark:
+                print(f"Auto-selected threshold: {threshold} ({best_count} pixels, DARK watermark)")
+            else:
+                print(f"Auto-selected threshold: {threshold} ({best_count} pixels, BRIGHT watermark)")
         else:
             # If no good threshold found, use default
             threshold = 30
+            best_is_dark = False
             print(f"Using default threshold: {threshold}")
 
-    # Detect pixels that are BRIGHTER than background (standard watermark case)
+    # Detect pixels based on whether it's a bright or dark watermark
     brightness_diff = corner_gray - background_level
-    corner_mask = brightness_diff > threshold
+
+    # Check which type of watermark we have in the likely region
+    likely_region_check = np.zeros_like(brightness_diff, dtype=bool)
+    likely_region_check[20:75, 20:75] = True
+
+    bright_candidates = np.sum((brightness_diff > threshold) & likely_region_check)
+    dark_candidates = np.sum((brightness_diff < -threshold) & likely_region_check)
+
+    # Track if this is the special white-overlay-on-dark-icon pattern
+    is_white_on_dark_icon_pattern = False
+
+    # Special case: white overlay on dark icon (like 0w.png)
+    # Detect by finding pixels that are not pure white but in a dark cluster
+    if background_level > 245 and dark_candidates > 500:
+        # On white background with dark pixels - likely white overlay on dark icon
+        # Detect the entire icon region (not just darkest pixels)
+        # Find pixels that differ significantly from white background
+        non_white = (corner_gray < 252) & likely_region_check  # More generous threshold
+        num_non_white = np.sum(non_white)
+
+        if num_non_white > 700:  # Lower threshold for large icon region
+            print(f"Detected WHITE-OVERLAY-ON-DARK-ICON pattern ({num_non_white} pixels)")
+            corner_mask = non_white
+            is_white_on_dark_icon_pattern = True
+        else:
+            # Regular dark watermark
+            corner_mask = brightness_diff < -threshold
+            print(f"Detected DARK watermark pattern (darker than background)")
+    elif dark_candidates > bright_candidates * 2 and dark_candidates > 500 and bright_candidates < 300:
+        # Dark watermark (rare case: dark sparkle on light background)
+        corner_mask = brightness_diff < -threshold
+        print(f"Detected DARK watermark pattern (darker than background)")
+    else:
+        # Bright watermark (standard case)
+        corner_mask = brightness_diff > threshold
 
     # Very minimal morphological operations to avoid over-detection
     # Just fill small holes, don't expand
@@ -157,7 +238,7 @@ def detect_watermark_mask(img_array, threshold=None):
     # Place the corner mask in the full mask
     mask[y_start:, x_start:] = corner_mask
 
-    return mask
+    return mask, is_white_on_dark_icon_pattern
 
 
 def analyze_color_shift(img_array, mask):
@@ -255,7 +336,7 @@ def remove_watermark(input_path, output_path=None, threshold=None):
 
     # Detect watermark
     print("Detecting watermark...")
-    mask = detect_watermark_mask(img_array, threshold)
+    mask, is_white_on_dark_icon = detect_watermark_mask(img_array, threshold)
 
     watermark_pixels = np.sum(mask)
     print(f"Watermark region: {watermark_pixels} pixels")
@@ -269,21 +350,26 @@ def remove_watermark(input_path, output_path=None, threshold=None):
     # Analyze watermark features to choose strategy
     features = analyze_watermark_features(img_array, mask)
 
-    # Determine if watermark is BRIGHT overlay (on dark background) or DARK overlay (on light background)
-    # Sample some pixels to check
-    watermark_sample = img_array[mask][:1000]  # Sample up to 1000 pixels
-    background_sample_coords = ndimage.binary_dilation(mask, iterations=5) & ~mask
-    background_sample = img_array[background_sample_coords][:1000]
-
-    watermark_brightness = np.mean(watermark_sample)
-    background_brightness = np.mean(background_sample)
-
-    is_bright_overlay = watermark_brightness > background_brightness
-
-    if is_bright_overlay:
-        print(f"Detected BRIGHT overlay (watermark={watermark_brightness:.1f} > background={background_brightness:.1f})")
+    # Determine overlay type
+    if is_white_on_dark_icon:
+        is_bright_overlay = True  # Treat as bright overlay (white) that needs removal
+        print(f"Using WHITE-OVERLAY-ON-DARK-ICON removal strategy")
     else:
-        print(f"Detected DARK overlay (watermark={watermark_brightness:.1f} < background={background_brightness:.1f})")
+        # Determine if watermark is BRIGHT overlay (on dark background) or DARK overlay (on light background)
+        # Sample some pixels to check
+        watermark_sample = img_array[mask][:1000]  # Sample up to 1000 pixels
+        background_sample_coords = ndimage.binary_dilation(mask, iterations=5) & ~mask
+        background_sample = img_array[background_sample_coords][:1000]
+
+        watermark_brightness = np.mean(watermark_sample)
+        background_brightness = np.mean(background_sample)
+
+        if watermark_brightness > background_brightness:
+            is_bright_overlay = True
+            print(f"Detected BRIGHT overlay (watermark={watermark_brightness:.1f} > background={background_brightness:.1f})")
+        else:
+            is_bright_overlay = False
+            print(f"Detected DARK overlay (watermark={watermark_brightness:.1f} < background={background_brightness:.1f})")
 
     cleaned = img_array.copy().astype(float)
 
@@ -327,7 +413,25 @@ def remove_watermark(input_path, output_path=None, threshold=None):
             outside_brightness = np.mean(outside_median)
 
             # Calculate alpha based on overlay type
-            if is_bright_overlay and inside_brightness > outside_brightness:
+            if is_white_on_dark_icon:
+                # Special case: white overlay on dark icon
+                # The "outside" pixels may be white background, but we want the underlying dark icon
+                # Compare lighter inside pixels with darker icon pixels
+                # For now, estimate alpha based on how much brighter the inside is vs darkest nearby pixels
+
+                # Find darker reference pixels (the underlying dark icon we want to restore)
+                # Look for the darkest pixels in the watermark region as reference
+                all_watermark_colors = img_array[mask].astype(float)
+                dark_reference = np.percentile(all_watermark_colors, 25, axis=0)  # 25th percentile (darker pixels)
+
+                # inside = dark_reference × (1 - α) + 255 × α
+                # α = (inside - dark_reference) / (255 - dark_reference)
+                alpha_per_channel = (inside_median - dark_reference) / (255 - dark_reference + 1e-6)
+                alpha_per_channel = np.clip(alpha_per_channel, 0, 1)
+                alpha_estimate = np.mean(alpha_per_channel)
+                alpha_estimates.append(alpha_estimate)
+                print(f"  Depth {depth}: α={alpha_estimate:.3f}, inside={inside_median}, dark_ref={dark_reference}, samples={np.sum(inside_at_depth)}")
+            elif is_bright_overlay and inside_brightness > outside_brightness:
                 # White overlay: inside = outside × (1 - α) + 255 × α
                 # α = (inside - outside) / (255 - outside)
                 alpha_per_channel = (inside_median - outside_median) / (255 - outside_median + 1e-6)
@@ -432,7 +536,37 @@ def remove_watermark(input_path, output_path=None, threshold=None):
             watermark_observed = channel_data[mask]
             watermark_background = background_estimate[mask]
 
-            if is_bright_overlay:
+            if is_white_on_dark_icon:
+                # Special case: white overlay on dark icon
+                # The "background" here is actually the dark icon we want to restore
+                # Use the darkest pixels in the watermark region as reference for what it should be
+                dark_icon_reference = np.percentile(channel_data[mask], 20)  # 20th percentile of channel
+
+                # observed = dark_icon × (1-α) + 255 × α
+                # We want to solve for dark_icon, but we know α and observed
+                # Rearranging: dark_icon = (observed - 255α) / (1 - α)
+                # But we want per-pixel: use local brightness to estimate local dark value
+
+                # Estimate what each pixel's underlying darkness should be
+                # based on its observed brightness relative to the icon's brightness range
+                watermark_all = channel_data[mask]
+                bright_ref = np.percentile(watermark_all, 80)  # Brighter areas
+                dark_ref = np.percentile(watermark_all, 20)  # Darker areas
+
+                # For each pixel, estimate its base darkness proportionally
+                # If it's brighter in observed, it should be proportionally brighter in base too
+                brightness_ratio = (watermark_observed - dark_ref) / (bright_ref - dark_ref + 1e-6)
+                brightness_ratio = np.clip(brightness_ratio, 0, 1)
+
+                # Estimate local underlying dark value
+                local_dark_base = dark_ref + brightness_ratio * (dark_ref * 0.5)  # Allow some variation
+
+                # Now reverse the white overlay
+                # observed = local_dark_base × (1-α) + 255 × α
+                # Solve for actual local_dark: (observed - 255α) / (1 - α)
+                corrected = (watermark_observed - 255 * alpha) / (1 - alpha + 1e-6)
+
+            elif is_bright_overlay:
                 # White overlay: observed = background × (1-α) + 255 × α
                 # Local alpha: α = (observed - background) / (255 - background)
                 local_alpha = (watermark_observed - watermark_background) / (255 - watermark_background + 1e-6)
