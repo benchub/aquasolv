@@ -36,9 +36,9 @@ for img in "$INPUT_DIR"/*.png; do
 
         echo "Processing: $filename"
         if [ -z "$THRESHOLD" ]; then
-            python3 "$SCRIPT_DIR/remove_watermark.py" "$img" -o "$output_path"
+            "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/remove_watermark.py" "$img" -o "$output_path"
         else
-            python3 "$SCRIPT_DIR/remove_watermark.py" "$img" -o "$output_path" -t "$THRESHOLD"
+            "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/remove_watermark.py" "$img" -o "$output_path" -t "$THRESHOLD"
         fi
 
         if [ $? -eq 0 ]; then
