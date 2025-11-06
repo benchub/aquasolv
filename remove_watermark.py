@@ -240,6 +240,30 @@ def detect_watermark_mask(img_array, threshold=None):
 
     corner_mask = corner_mask & likely_region
 
+    # Second pass: Detect watermark over dark borders
+    # For images with multi-colored borders (e.g., cream + dark blue), the watermark
+    # may sit over dark regions and appear as mid-tone "outliers"
+    # These pixels are brighter than the dark border but darker than the light border
+
+    # Check if there are substantial dark regions AND mid-tone outliers
+    very_dark_pixels = np.sum(corner_gray < 80)
+    mid_tone_pixels = np.sum((corner_gray >= 100) & (corner_gray < 180))
+
+    if very_dark_pixels > 3000 and mid_tone_pixels > 100 and mid_tone_pixels < 500:
+        # Looks like we have dark borders with some mid-tone outliers (potential watermark)
+        # Detect these outliers in the likely region
+        mid_tone_mask = (corner_gray >= 100) & (corner_gray < 180) & likely_region
+
+        # Only include if they're adjacent to the already-detected watermark
+        # (to avoid false positives from image content)
+        if np.sum(corner_mask) > 0:
+            expanded_existing = ndimage.binary_dilation(corner_mask, iterations=15)
+            mid_tone_adjacent = mid_tone_mask & expanded_existing
+
+            if np.sum(mid_tone_adjacent) > 50:
+                print(f"Detected additional watermark over dark border regions (+{np.sum(mid_tone_adjacent)} pixels)")
+                corner_mask = corner_mask | mid_tone_adjacent
+
     # Place the corner mask in the full mask
     mask[y_start:, x_start:] = corner_mask
 
@@ -937,6 +961,108 @@ def remove_watermark(input_path, output_path=None, threshold=None):
         # Fallback: use mild correction
         print("Not enough edge pixels found, using mild correction")
         cleaned[mask] = watermark_pixels * 0.9
+
+    # Post-processing: Handle full-border cases where watermark overlays border pixels
+    # After watermark removal, some pixels may be gray instead of black/white border color
+    # Detect and correct these border pixels
+    height, width = img_array.shape[:2]
+    corner_size = 100
+    y_start = height - corner_size
+    x_start = width - corner_size
+    corner_cleaned = cleaned[y_start:, x_start:]
+    corner_mask = mask[y_start:, x_start:]
+
+    if np.sum(corner_mask) > 0:
+        corner_gray = np.mean(corner_cleaned, axis=2)
+
+        # Detect strong border FRAMES (not just dark backgrounds)
+        # A border frame has very dark/bright pixels concentrated at edges AND
+        # extending into the interior (forming lines/rectangles)
+        very_dark = corner_gray < 15
+        very_bright = corner_gray > 240
+
+        # Only trigger for true black borders (< 15) or white borders (> 240)
+        # that form substantial frames (> 500 pixels)
+        has_border_frames = np.sum(very_dark) > 500 or np.sum(very_bright) > 500
+
+        if has_border_frames:
+            # Detect border pixels that may have been affected by watermark
+            # These are pixels in the watermark region that should be part of the border
+
+            # Method 1: Detect continuous dark/bright lines in rows/columns
+            border_correction_mask = np.zeros((corner_size, corner_size), dtype=bool)
+
+            for y in range(corner_size):
+                row = corner_gray[y, :]
+                # If row has substantial dark/bright pixels, it's likely a border line
+                # Check if there are dark pixels at the edges (indicating a border)
+                edge_very_dark = np.sum(row[:10] < 30) + np.sum(row[-10:] < 30)
+                edge_dark_blue = np.sum(row[:10] < 100) + np.sum(row[-10:] < 100)
+                edge_bright = np.sum(row[:10] > 230) + np.sum(row[-10:] > 230)
+
+                if edge_very_dark > 5 or edge_dark_blue > 10 or edge_bright > 5:
+                    # This row crosses a border - mark darker/brighter pixels for correction
+                    # For dark blue borders, mark pixels brighter than they should be
+                    if edge_dark_blue > 10:
+                        border_correction_mask[y, :] |= (row < 180) | (row > 200)
+                    else:
+                        border_correction_mask[y, :] |= (row < 150) | (row > 200)
+
+            for x in range(corner_size):
+                col = corner_gray[:, x]
+                # If column has substantial dark/bright pixels at edges, it's likely a border line
+                edge_very_dark = np.sum(col[:10] < 30) + np.sum(col[-10:] < 30)
+                edge_dark_blue = np.sum(col[:10] < 100) + np.sum(col[-10:] < 100)
+                edge_bright = np.sum(col[:10] > 230) + np.sum(col[-10:] > 230)
+
+                if edge_very_dark > 5 or edge_dark_blue > 10 or edge_bright > 5:
+                    # This column crosses a border - mark darker/brighter pixels for correction
+                    if edge_dark_blue > 10:
+                        border_correction_mask[:, x] |= (col < 180) | (col > 200)
+                    else:
+                        border_correction_mask[:, x] |= (col < 150) | (col > 200)
+
+            # Correct pixels that were in the watermark region OR are near watermark edges
+            # (captures anti-aliased pixels that are darker than background)
+            expanded_mask = ndimage.binary_dilation(corner_mask, iterations=3)
+            border_correction_mask &= expanded_mask
+
+            if np.sum(border_correction_mask) > 0:
+                print(f"Correcting {np.sum(border_correction_mask)} border pixels affected by watermark overlay")
+
+                # For each pixel needing correction, snap it to the nearby border color
+                for y in range(corner_size):
+                    for x in range(corner_size):
+                        if border_correction_mask[y, x]:
+                            # Find nearest non-watermark pixel in the same row or column
+                            # to determine the border color
+
+                            # Check row
+                            row_colors = []
+                            for dx in range(-10, 11):
+                                nx = x + dx
+                                if 0 <= nx < corner_size and not corner_mask[y, nx]:
+                                    # Accept dark borders (<100) or very bright borders (>230)
+                                    if corner_gray[y, nx] < 100 or corner_gray[y, nx] > 230:
+                                        row_colors.append(corner_cleaned[y, nx])
+
+                            # Check column
+                            col_colors = []
+                            for dy in range(-10, 11):
+                                ny = y + dy
+                                if 0 <= ny < corner_size and not corner_mask[ny, x]:
+                                    # Accept dark borders (<100) or very bright borders (>230)
+                                    if corner_gray[ny, x] < 100 or corner_gray[ny, x] > 230:
+                                        col_colors.append(corner_cleaned[ny, x])
+
+                            # Use the border color if found
+                            if len(row_colors) > 0 or len(col_colors) > 0:
+                                all_colors = row_colors + col_colors
+                                border_color = np.median(all_colors, axis=0)
+                                corner_cleaned[y, x] = border_color
+
+                # Update the main cleaned array
+                cleaned[y_start:, x_start:] = corner_cleaned
 
     # Clamp values to valid range
     cleaned = np.clip(cleaned, 0, 255).astype(np.uint8)
