@@ -985,6 +985,17 @@ def remove_watermark(input_path, output_path=None, threshold=None):
         # that form substantial frames (> 500 pixels)
         has_border_frames = np.sum(very_dark) > 500 or np.sum(very_bright) > 500
 
+        # Don't apply border correction if the watermark itself was bright
+        # In that case, bright pixels in output are likely failed removal attempts,
+        # not border artifacts
+        corner_original = img_array[y_start:, x_start:]
+        watermark_pixels_original = corner_original[corner_mask]
+        if len(watermark_pixels_original) > 0:
+            watermark_brightness = np.mean(watermark_pixels_original)
+            if watermark_brightness > 200:
+                # Watermark was bright, don't apply border correction
+                has_border_frames = False
+
         if has_border_frames:
             # Detect border pixels that may have been affected by watermark
             # These are pixels in the watermark region that should be part of the border
