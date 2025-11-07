@@ -1,0 +1,849 @@
+Processing 124 images...
+
+Processing samples/0w.png...
+Image size: (1024, 1024, 3)
+L-pattern detected: top_overlap=80, left_overlap=72, total_borders=688, concentrated=114
+Using template-based removal for L-pattern (874 template pixels)
+Saved to: test_output/0w.png
+[1/124] ✓ 0w.png: 99.96%
+Processing samples/5u.png...
+Image size: (1024, 1024, 3)
+L-pattern detected: top_overlap=136, left_overlap=136, total_borders=1203, concentrated=444
+Using template-based removal for L-pattern (874 template pixels)
+Saved to: test_output/5u.png
+[2/124] ✓ 5u.png: 99.89%
+[3/124] SKIP: Gemini_Generated_Image_5mc79a5mc79a5mc7.png (no target)
+[4/124] SKIP: Gemini_Generated_Image_88zu6i88zu6i88zu.png (no target)
+[5/124] SKIP: Gemini_Generated_Image_9z0m099z0m099z0m.png (no target)
+[6/124] SKIP: Gemini_Generated_Image_m6oi7im6oi7im6oi.png (no target)
+[7/124] SKIP: Gemini_Generated_Image_n8feo4n8feo4n8fe.png (no target)
+[8/124] SKIP: Gemini_Generated_Image_r5707sr5707sr570.png (no target)
+[9/124] SKIP: a conference call.png (no target)
+[10/124] SKIP: a meeting about progress.png (no target)
+[11/124] SKIP: a pretentious phrase.png (no target)
+[12/124] SKIP: a solitary falsehood.png (no target)
+[13/124] SKIP: aerial garden gnomes.png (no target)
+[14/124] SKIP: airborne arsonist.png (no target)
+Processing samples/apple ii.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2830 pixels, DARK)
+Auto-selected threshold: 5 (2830 pixels, DARK watermark)
+Detected DARK watermark pattern (darker than background)
+Watermark region: 2830 pixels
+Removing watermark...
+Watermark features: std=40.4, bright%=0.0, edges=0.07
+Detected BRIGHT overlay (watermark=106.6 > background=95.1)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Using adaptive background estimation (high variance detected)
+Correcting 3379 border pixels affected by watermark overlay
+Saved to: test_output/apple ii.png
+[15/124] ✓ apple ii.png: 99.80%
+Processing samples/arch.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (872 pixels, BRIGHT)
+Auto-selected threshold: 5 (872 pixels, BRIGHT watermark)
+Watermark region: 872 pixels
+Removing watermark...
+Watermark features: std=11.5, bright%=0.0, edges=0.14
+Detected BRIGHT overlay (watermark=192.2 > background=137.8)
+  Depth 2: α=0.475, inside=[247. 176. 165.], outside=[241.  97.  76.], samples=636
+  Depth 3: α=0.475, inside=[247. 176. 165.], outside=[241.  97.  76.], samples=540
+  Depth 4: α=0.475, inside=[247. 176. 165.], outside=[241.  97.  76.], samples=456
+  Depth 5: α=0.475, inside=[247. 176. 165.], outside=[241.  97.  76.], samples=384
+Selected alpha (median of 4 estimates): 0.475
+Saved to: test_output/arch.png
+[16/124] ✓ arch.png: 99.41%
+[17/124] SKIP: asteroid anorexia.png (no target)
+Processing samples/audience.png...
+Image size: (1024, 1024, 3)
+Full border detected (not L-pattern): opposite=602
+Detecting watermark...
+Auto-selected threshold: None (757 pixels, BRIGHT)
+Auto-selected threshold: 5 (757 pixels, BRIGHT watermark)
+Watermark region: 757 pixels
+Removing watermark...
+Watermark features: std=7.1, bright%=91.7, edges=0.12
+Detected BRIGHT overlay (watermark=207.4 > background=131.0)
+  Depth 2: α=0.487, inside=[245. 221. 162.], outside=[236. 188.  71.], samples=559
+  Depth 3: α=0.487, inside=[245. 221. 162.], outside=[236. 188.  71.], samples=477
+  Depth 4: α=0.487, inside=[245. 221. 162.], outside=[236. 188.  71.], samples=408
+  Depth 5: α=0.487, inside=[245. 221. 162.], outside=[236. 188.  71.], samples=346
+Selected alpha (median of 4 estimates): 0.487
+Saved to: test_output/audience.png
+[18/124] ✓ audience.png: 99.86%
+Processing samples/aurora borealis planet.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2486 pixels, BRIGHT)
+Auto-selected threshold: 5 (2486 pixels, BRIGHT watermark)
+Watermark region: 2486 pixels
+Removing watermark...
+Watermark features: std=48.8, bright%=74.7, edges=0.08
+Detected BRIGHT overlay (watermark=201.9 > background=170.0)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Using adaptive background estimation (high variance detected)
+Saved to: test_output/aurora borealis planet.png
+[19/124] ✓ aurora borealis planet.png: 99.74%
+[20/124] SKIP: biarritz.png (no target)
+Processing samples/blasted farewell.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2660 pixels, BRIGHT)
+Auto-selected threshold: 5 (2660 pixels, BRIGHT watermark)
+Watermark region: 2660 pixels
+Removing watermark...
+Watermark features: std=42.4, bright%=55.2, edges=0.14
+Detected DARK overlay (watermark=193.1 < background=201.4)
+  Depth 2: α=0.167, inside=[175. 225. 237.], outside=[255. 255. 255.], samples=2269
+  Depth 3: α=0.171, inside=[174. 224. 236.], outside=[255. 255. 255.], samples=2086
+  Depth 4: α=0.175, inside=[172. 224. 235.], outside=[255. 255. 255.], samples=1912
+  Depth 5: α=0.183, inside=[168. 223. 234.], outside=[255. 255. 255.], samples=1747
+Selected alpha (median of 4 estimates): 0.173
+Using adaptive background estimation (high variance detected)
+Saved to: test_output/blasted farewell.png
+[21/124] ✓ blasted farewell.png: 99.71%
+[22/124] SKIP: bolshevik birds.png (no target)
+[23/124] SKIP: boxed up disappointment.png (no target)
+[24/124] SKIP: bribery bay.png (no target)
+[25/124] SKIP: brimstone inferno.png (no target)
+[26/124] SKIP: brutal pruning.png (no target)
+[27/124] SKIP: burninglow.png (no target)
+Processing samples/buzz aldrin's warning.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (3019 pixels, BRIGHT)
+Auto-selected threshold: 5 (3019 pixels, BRIGHT watermark)
+Watermark region: 3019 pixels
+Removing watermark...
+Watermark features: std=9.7, bright%=99.9, edges=0.04
+Detected BRIGHT overlay (watermark=215.3 > background=204.0)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Saved to: test_output/buzz aldrin's warning.png
+[28/124] ✓ buzz aldrin's warning.png: 99.60%
+Processing samples/ca.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (1006 pixels, BRIGHT)
+Auto-selected threshold: 5 (1006 pixels, BRIGHT watermark)
+Watermark region: 1006 pixels
+Removing watermark...
+Watermark features: std=45.9, bright%=31.4, edges=0.21
+Detected BRIGHT overlay (watermark=184.9 > background=71.7)
+  Depth 2: α=0.561, inside=[155. 157. 193.], outside=[42. 45. 92.], samples=739
+  Depth 3: α=0.561, inside=[155. 157. 193.], outside=[42. 45. 92.], samples=627
+  Depth 4: α=0.561, inside=[155. 157. 193.], outside=[42. 45. 92.], samples=527
+  Depth 5: α=0.561, inside=[155. 157. 193.], outside=[42. 45. 92.], samples=439
+Capping alpha from 0.561 to 0.53 (bright features detected)
+Selected alpha (median of 4 estimates): 0.530
+Using adaptive background estimation (high variance detected)
+Saved to: test_output/ca.png
+[29/124] ✓ ca.png: 99.78%
+Processing samples/ch.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (873 pixels, BRIGHT)
+Auto-selected threshold: 5 (873 pixels, BRIGHT watermark)
+Watermark region: 873 pixels
+Removing watermark...
+Watermark features: std=16.4, bright%=0.0, edges=0.15
+Detected BRIGHT overlay (watermark=166.0 > background=88.7)
+  Depth 2: α=0.499, inside=[152. 164. 199.], outside=[ 50.  73. 143.], samples=637
+  Depth 3: α=0.499, inside=[152. 164. 199.], outside=[ 50.  73. 143.], samples=541
+  Depth 4: α=0.499, inside=[152. 164. 199.], outside=[ 50.  73. 143.], samples=457
+  Depth 5: α=0.499, inside=[152. 164. 199.], outside=[ 50.  73. 143.], samples=385
+Selected alpha (median of 4 estimates): 0.499
+Saved to: test_output/ch.png
+[30/124] ✓ ch.png: 99.44%
+Processing samples/chaos tango.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2715 pixels, BRIGHT)
+Auto-selected threshold: 5 (2715 pixels, BRIGHT watermark)
+Watermark region: 2715 pixels
+Removing watermark...
+Watermark features: std=38.3, bright%=38.0, edges=0.05
+Detected BRIGHT overlay (watermark=209.7 > background=173.2)
+  Depth 2: α=0.014, inside=[115. 197. 198.], outside=[114. 196. 197.], samples=2308
+  Depth 3: α=0.014, inside=[115. 197. 198.], outside=[114. 196. 197.], samples=2118
+  Depth 4: α=0.016, inside=[116. 197. 198.], outside=[114. 196. 197.], samples=1937
+  Depth 5: α=0.016, inside=[116. 197. 198.], outside=[114. 196. 197.], samples=1765
+Selected alpha (median of 4 estimates): 0.015
+Not enough edge pixels found, using mild correction
+Correcting 893 border pixels affected by watermark overlay
+Saved to: test_output/chaos tango.png
+[31/124] ✓ chaos tango.png: 99.68%
+Processing samples/climate groundhog.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=84/660 = 12.7%
+Detecting watermark...
+Auto-selected threshold: None (2233 pixels, BRIGHT)
+Auto-selected threshold: 5 (2233 pixels, BRIGHT watermark)
+Watermark region: 2233 pixels
+Removing watermark...
+Watermark features: std=29.1, bright%=94.5, edges=0.06
+Detected BRIGHT overlay (watermark=239.6 > background=130.1)
+  Depth 2: α=1.000, inside=[255. 255. 255.], outside=[66. 85. 92.], samples=1486
+  Depth 3: α=1.000, inside=[255. 255. 255.], outside=[66. 85. 92.], samples=1232
+  Depth 4: α=1.000, inside=[255. 255. 255.], outside=[66. 85. 92.], samples=1088
+  Depth 5: α=1.000, inside=[255. 255. 255.], outside=[66. 85. 92.], samples=956
+Capping alpha from 1.000 to 0.53 (bright features detected)
+Selected alpha (median of 4 estimates): 0.530
+Saved to: test_output/climate groundhog.png
+[32/124] ✓ climate groundhog.png: 99.78%
+Processing samples/climate hell.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=216/1974 = 10.9%
+Detecting watermark...
+Auto-selected threshold: None (622 pixels, BRIGHT)
+Auto-selected threshold: 5 (622 pixels, BRIGHT watermark)
+Watermark region: 622 pixels
+Removing watermark...
+Watermark features: std=6.5, bright%=92.4, edges=0.13
+Detected BRIGHT overlay (watermark=211.1 > background=132.9)
+  Depth 2: α=0.484, inside=[246. 223. 170.], outside=[238. 193.  86.], samples=435
+  Depth 3: α=0.484, inside=[246. 223. 170.], outside=[238. 193.  86.], samples=356
+  Depth 4: α=0.484, inside=[246. 223. 170.], outside=[238. 193.  86.], samples=290
+  Depth 5: α=0.484, inside=[246. 223. 170.], outside=[238. 193.  86.], samples=231
+Selected alpha (median of 4 estimates): 0.484
+Saved to: test_output/climate hell.png
+[33/124] ✓ climate hell.png: 99.89%
+[34/124] SKIP: coastal quest.png (no target)
+[35/124] SKIP: cold war room.png (no target)
+Processing samples/coming full circle.png...
+Image size: (1024, 1024, 3)
+L-pattern detected: top_overlap=166, left_overlap=166, total_borders=1268, concentrated=260
+Using template-based removal for L-pattern (874 template pixels)
+Saved to: test_output/coming full circle.png
+[36/124] ✓ coming full circle.png: 99.73%
+[37/124] SKIP: cosmic power.png (no target)
+[38/124] SKIP: creepy chemical camp.png (no target)
+[39/124] SKIP: cul-de-sac-ception.png (no target)
+[40/124] SKIP: decadent isle of elite depravity.png (no target)
+[41/124] SKIP: delta nagger.png (no target)
+Processing samples/democratic party's polls.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (527 pixels, BRIGHT)
+Auto-selected threshold: 5 (527 pixels, BRIGHT watermark)
+Watermark region: 527 pixels
+Removing watermark...
+Watermark features: std=0.9, bright%=100.0, edges=0.10
+Detected BRIGHT overlay (watermark=254.7 > background=190.1)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Saved to: test_output/democratic party's polls.png
+[42/124] ✓ democratic party's polls.png: 99.74%
+[43/124] SKIP: devil cat.png (no target)
+[44/124] SKIP: discreet debts.png (no target)
+Processing samples/double blockage.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=48/349 = 13.8%
+Detecting watermark...
+Auto-selected threshold: None (2281 pixels, BRIGHT)
+Auto-selected threshold: 5 (2281 pixels, BRIGHT watermark)
+Watermark region: 2281 pixels
+Removing watermark...
+Watermark features: std=18.5, bright%=96.3, edges=0.10
+Detected BRIGHT overlay (watermark=245.0 > background=166.9)
+  Depth 2: α=1.000, inside=[255. 255. 255.], outside=[147. 187. 200.], samples=1597
+  Depth 3: α=1.000, inside=[255. 255. 255.], outside=[147. 187. 200.], samples=1286
+  Depth 4: α=1.000, inside=[255. 255. 255.], outside=[147. 187. 200.], samples=995
+  Depth 5: α=1.000, inside=[255. 255. 255.], outside=[147. 187. 200.], samples=781
+Capping alpha from 1.000 to 0.53 (bright features detected)
+Selected alpha (median of 4 estimates): 0.530
+Saved to: test_output/double blockage.png
+[45/124] ✓ double blockage.png: 99.74%
+Processing samples/double cleanse.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Border detected in edge samples (level=254.3), trying interior sampling...
+Using interior background level: 203.7 (edge was 254.3)
+Auto-selected threshold: None (949 pixels, BRIGHT)
+Auto-selected threshold: 5 (949 pixels, BRIGHT watermark)
+Watermark region: 949 pixels
+Removing watermark...
+Watermark features: std=13.6, bright%=100.0, edges=0.08
+Detected BRIGHT overlay (watermark=239.3 > background=189.3)
+  Depth 2: α=0.941, inside=[253. 253. 253.], outside=[163. 210. 237.], samples=572
+  Depth 3: α=0.948, inside=[253. 254. 253.], outside=[163. 210. 237.], samples=427
+  Depth 4: α=0.948, inside=[253. 254. 253.], outside=[163. 210. 237.], samples=306
+  Depth 5: α=0.956, inside=[253. 255. 253.], outside=[163. 210. 237.], samples=203
+Capping alpha from 0.948 to 0.53 (bright features detected)
+Selected alpha (median of 4 estimates): 0.530
+Saved to: test_output/double cleanse.png
+[46/124] ✓ double cleanse.png: 99.75%
+[47/124] SKIP: double trouble hell.png (no target)
+[48/124] SKIP: double whammy meeting.png (no target)
+Processing samples/downward elegance.png...
+Image size: (1024, 1024, 3)
+Full border detected (not L-pattern): opposite=625
+Detecting watermark...
+Border detected in edge samples (level=254.7), trying interior sampling...
+Auto-selected threshold: None (1863 pixels, DARK)
+Auto-selected threshold: 5 (1863 pixels, DARK watermark)
+Detected WHITE-OVERLAY-ON-DARK-ICON pattern (1869 pixels)
+Detected additional watermark over dark border regions (+175 pixels)
+Watermark region: 1870 pixels
+Removing watermark...
+Watermark features: std=59.7, bright%=3.7, edges=0.03
+Using WHITE-OVERLAY-ON-DARK-ICON removal strategy
+  Depth 2: α=0.000, inside=[0. 0. 0.], dark_ref=[0. 0. 0.], samples=1451
+  Depth 3: α=0.000, inside=[0. 0. 0.], dark_ref=[0. 0. 0.], samples=1255
+  Depth 4: α=0.000, inside=[0. 0. 0.], dark_ref=[0. 0. 0.], samples=1068
+  Depth 5: α=0.000, inside=[0. 0. 0.], dark_ref=[0. 0. 0.], samples=890
+Selected alpha (median of 4 estimates): 0.000
+Not enough edge pixels found, using mild correction
+Correcting 2521 border pixels affected by watermark overlay
+Saved to: test_output/downward elegance.png
+[49/124] ✓ downward elegance.png: 99.92%
+Processing samples/drainage terror.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (1818 pixels, BRIGHT)
+Auto-selected threshold: 5 (1818 pixels, BRIGHT watermark)
+Watermark region: 1818 pixels
+Removing watermark...
+Watermark features: std=17.8, bright%=0.1, edges=0.13
+Detected BRIGHT overlay (watermark=154.7 > background=95.0)
+  Depth 2: α=0.490, inside=[143. 167. 181.], outside=[ 34.  81. 112.], samples=1203
+  Depth 3: α=0.492, inside=[143. 167. 182.], outside=[ 34.  81. 112.], samples=913
+  Depth 4: α=0.492, inside=[143. 167. 182.], outside=[ 34.  81. 112.], samples=642
+  Depth 5: α=0.492, inside=[143. 167. 182.], outside=[ 34.  81. 112.], samples=426
+Selected alpha (median of 4 estimates): 0.492
+Saved to: test_output/drainage terror.png
+[50/124] ✓ drainage terror.png: 99.66%
+Processing samples/dystopian novel.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=48/373 = 12.9%
+Detecting watermark...
+Auto-selected threshold: None (759 pixels, BRIGHT)
+Auto-selected threshold: 5 (759 pixels, BRIGHT watermark)
+Watermark region: 759 pixels
+Removing watermark...
+Watermark features: std=10.5, bright%=84.8, edges=0.17
+Detected BRIGHT overlay (watermark=203.1 > background=129.6)
+  Depth 2: α=0.492, inside=[232. 215. 174.], outside=[210. 176.  95.], samples=480
+  Depth 3: α=0.492, inside=[232. 215. 174.], outside=[210. 176.  95.], samples=391
+  Depth 4: α=0.492, inside=[232. 215. 174.], outside=[210. 176.  95.], samples=323
+  Depth 5: α=0.492, inside=[232. 215. 174.], outside=[210. 176.  95.], samples=261
+Selected alpha (median of 4 estimates): 0.492
+Saved to: test_output/dystopian novel.png
+[51/124] ✓ dystopian novel.png: 99.83%
+Processing samples/earl's cove.png...
+Image size: (1024, 1024, 3)
+Full border detected (not L-pattern): opposite=625
+Detecting watermark...
+Auto-selected threshold: None (684 pixels, BRIGHT)
+Auto-selected threshold: 5 (684 pixels, BRIGHT watermark)
+Watermark region: 684 pixels
+Removing watermark...
+Watermark features: std=5.6, bright%=94.7, edges=0.12
+Detected BRIGHT overlay (watermark=210.1 > background=137.6)
+  Depth 2: α=0.497, inside=[241. 219. 176.], outside=[227. 184.  98.], samples=496
+  Depth 3: α=0.497, inside=[241. 219. 176.], outside=[227. 184.  98.], samples=416
+  Depth 4: α=0.497, inside=[241. 219. 176.], outside=[227. 184.  98.], samples=348
+  Depth 5: α=0.497, inside=[241. 219. 176.], outside=[227. 184.  98.], samples=286
+Selected alpha (median of 4 estimates): 0.497
+Saved to: test_output/earl's cove.png
+[52/124] ✓ earl's cove.png: 99.63%
+[53/124] SKIP: earthy shame.png (no target)
+[54/124] SKIP: eco-reckless riders.png (no target)
+[55/124] SKIP: ex-pectations.png (no target)
+[56/124] SKIP: fairy conference center.png (no target)
+[57/124] SKIP: fey floating homes.png (no target)
+Processing samples/flying tiger.png...
+Image size: (1024, 1024, 3)
+L-pattern detected: top_overlap=187, left_overlap=187, total_borders=1364, concentrated=376
+Using template-based removal for L-pattern (874 template pixels)
+Saved to: test_output/flying tiger.png
+[58/124] ✓ flying tiger.png: 99.92%
+[59/124] SKIP: fog of the thames.png (no target)
+[60/124] SKIP: fortaleza.png (no target)
+[61/124] SKIP: fowl flair.png (no target)
+[62/124] SKIP: frozen glaciers lodge.png (no target)
+Processing samples/garbage wave theory.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=216/1974 = 10.9%
+Detecting watermark...
+Auto-selected threshold: None (636 pixels, BRIGHT)
+Auto-selected threshold: 5 (636 pixels, BRIGHT watermark)
+Watermark region: 636 pixels
+Removing watermark...
+Watermark features: std=8.7, bright%=90.6, edges=0.13
+Detected BRIGHT overlay (watermark=211.3 > background=123.5)
+  Depth 2: α=0.481, inside=[250. 224. 169.], outside=[246. 193.  84.], samples=439
+  Depth 3: α=0.481, inside=[250. 224. 169.], outside=[246. 193.  84.], samples=360
+  Depth 4: α=0.481, inside=[250. 224. 169.], outside=[246. 193.  84.], samples=293
+  Depth 5: α=0.481, inside=[250. 224. 169.], outside=[246. 193.  84.], samples=233
+Selected alpha (median of 4 estimates): 0.481
+Saved to: test_output/garbage wave theory.png
+[63/124] ✓ garbage wave theory.png: 99.89%
+[64/124] SKIP: giulio andreotti.png (no target)
+Processing samples/glacier of debt.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (624 pixels, BRIGHT)
+Auto-selected threshold: 5 (624 pixels, BRIGHT watermark)
+Watermark region: 624 pixels
+Removing watermark...
+Watermark features: std=2.1, bright%=100.0, edges=0.06
+Detected BRIGHT overlay (watermark=237.1 > background=164.3)
+  Depth 2: α=0.498, inside=[220. 243. 250.], outside=[186. 231. 245.], samples=428
+  Depth 3: α=0.498, inside=[220. 243. 250.], outside=[186. 231. 245.], samples=353
+  Depth 4: α=0.498, inside=[220. 243. 250.], outside=[186. 231. 245.], samples=287
+  Depth 5: α=0.498, inside=[220. 243. 250.], outside=[186. 231. 245.], samples=230
+Selected alpha (median of 4 estimates): 0.498
+Saved to: test_output/glacier of debt.png
+[65/124] ✓ glacier of debt.png: 99.81%
+Processing samples/grant's march.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=150/1091 = 13.7%
+Detecting watermark...
+Auto-selected threshold: None (596 pixels, BRIGHT)
+Auto-selected threshold: 5 (596 pixels, BRIGHT watermark)
+Watermark region: 596 pixels
+Removing watermark...
+Watermark features: std=13.5, bright%=78.7, edges=0.22
+Detected BRIGHT overlay (watermark=205.8 > background=114.4)
+  Depth 2: α=0.497, inside=[244. 223. 172.], outside=[233. 192.  89.], samples=305
+  Depth 3: α=0.497, inside=[244. 223. 172.], outside=[233. 192.  89.], samples=232
+  Depth 4: α=0.497, inside=[244. 223. 172.], outside=[233. 192.  89.], samples=174
+  Depth 5: α=0.497, inside=[244. 223. 172.], outside=[233. 192.  89.], samples=123
+Selected alpha (median of 4 estimates): 0.497
+Saved to: test_output/grant's march.png
+[66/124] ✓ grant's march.png: 99.76%
+Processing samples/graphic drowning.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2297 pixels, DARK)
+Auto-selected threshold: 5 (2297 pixels, DARK watermark)
+Detected DARK watermark pattern (darker than background)
+Watermark region: 2297 pixels
+Removing watermark...
+Watermark features: std=22.7, bright%=0.0, edges=0.09
+Detected DARK overlay (watermark=92.8 < background=127.9)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Correcting 3248 border pixels affected by watermark overlay
+Saved to: test_output/graphic drowning.png
+[67/124] ✓ graphic drowning.png: 99.80%
+[68/124] SKIP: green revolution riders.png (no target)
+Processing samples/hawaiian blend.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=192/1870 = 10.3%
+Detecting watermark...
+Auto-selected threshold: None (686 pixels, BRIGHT)
+Auto-selected threshold: 5 (686 pixels, BRIGHT watermark)
+Watermark region: 686 pixels
+Removing watermark...
+Watermark features: std=7.6, bright%=89.4, edges=0.13
+Detected BRIGHT overlay (watermark=205.0 > background=129.2)
+  Depth 2: α=0.500, inside=[241. 215. 167.], outside=[227. 175.  79.], samples=498
+  Depth 3: α=0.496, inside=[241. 214. 167.], outside=[227. 175.  79.], samples=418
+  Depth 4: α=0.496, inside=[241. 214. 167.], outside=[227. 175.  79.], samples=350
+  Depth 5: α=0.496, inside=[241. 214. 167.], outside=[227. 175.  79.], samples=288
+Selected alpha (median of 4 estimates): 0.496
+Saved to: test_output/hawaiian blend.png
+[69/124] ✓ hawaiian blend.png: 99.86%
+Processing samples/healthcare.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=312/2869 = 10.9%
+Detecting watermark...
+Auto-selected threshold: None (2148 pixels, DARK)
+Auto-selected threshold: 5 (2148 pixels, DARK watermark)
+Watermark region: 474 pixels
+Removing watermark...
+Watermark features: std=8.5, bright%=86.9, edges=0.15
+Detected BRIGHT overlay (watermark=211.6 > background=131.0)
+  Depth 2: α=0.500, inside=[248. 225. 172.], outside=[241.  194.   91.5], samples=302
+  Depth 3: α=0.500, inside=[248. 225. 172.], outside=[241.  194.   91.5], samples=231
+  Depth 4: α=0.500, inside=[248. 225. 172.], outside=[241.  194.   91.5], samples=173
+  Depth 5: α=0.500, inside=[248. 225. 172.], outside=[241.  194.   91.5], samples=121
+Selected alpha (median of 4 estimates): 0.500
+Saved to: test_output/healthcare.png
+[70/124] ✓ healthcare.png: 99.85%
+Processing samples/hell's lava.png...
+Image size: (1024, 1024, 3)
+Full border detected (not L-pattern): opposite=625
+Detecting watermark...
+Auto-selected threshold: None (811 pixels, BRIGHT)
+Auto-selected threshold: 5 (811 pixels, BRIGHT watermark)
+Watermark region: 811 pixels
+Removing watermark...
+Watermark features: std=25.5, bright%=0.0, edges=0.14
+Detected BRIGHT overlay (watermark=151.7 > background=39.3)
+  Depth 2: α=0.586, inside=[216. 165. 147.], outside=[80. 80. 41.], samples=577
+  Depth 3: α=0.591, inside=[217.  166.5 147. ], outside=[80. 80. 41.], samples=486
+  Depth 4: α=0.594, inside=[218. 167. 147.], outside=[80. 80. 41.], samples=408
+  Depth 5: α=0.603, inside=[222. 167. 148.], outside=[80. 80. 41.], samples=342
+Selected alpha (median of 4 estimates): 0.592
+Correcting 1204 border pixels affected by watermark overlay
+Saved to: test_output/hell's lava.png
+[71/124] ✓ hell's lava.png: 99.90%
+Processing samples/hellfire.png...
+Image size: (1024, 1024, 3)
+Full border detected (not L-pattern): opposite=576
+Detecting watermark...
+Auto-selected threshold: None (2830 pixels, DARK)
+Auto-selected threshold: 5 (2830 pixels, DARK watermark)
+Detected DARK watermark pattern (darker than background)
+Watermark region: 2830 pixels
+Removing watermark...
+Watermark features: std=57.8, bright%=0.0, edges=0.08
+Detected BRIGHT overlay (watermark=45.3 > background=23.6)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Using adaptive background estimation (high variance detected)
+Correcting 3402 border pixels affected by watermark overlay
+Saved to: test_output/hellfire.png
+[72/124] ✓ hellfire.png: 99.98%
+Processing samples/hidden entitlements.png...
+Image size: (1024, 1024, 3)
+L-pattern detected: top_overlap=46, left_overlap=48, total_borders=493, concentrated=72
+Using template-based removal for L-pattern (874 template pixels)
+Saved to: test_output/hidden entitlements.png
+[73/124] ✓ hidden entitlements.png: 99.87%
+[74/124] SKIP: high-end freaks with expensive vices.png (no target)
+Processing samples/hillary's health.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2926 pixels, DARK)
+Auto-selected threshold: 5 (2926 pixels, DARK watermark)
+Detected DARK watermark pattern (darker than background)
+Watermark region: 2926 pixels
+Removing watermark...
+Watermark features: std=40.8, bright%=0.0, edges=0.07
+Detected BRIGHT overlay (watermark=93.5 > background=81.6)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Using adaptive background estimation (high variance detected)
+Correcting 3507 border pixels affected by watermark overlay
+Saved to: test_output/hillary's health.png
+[75/124] ✓ hillary's health.png: 99.81%
+[76/124] SKIP: hollywood sex therapist.png (no target)
+[77/124] SKIP: hydrabadoodle.png (no target)
+[78/124] SKIP: ice wall.png (no target)
+[79/124] SKIP: isle of unchecked corruption.png (no target)
+[80/124] SKIP: jinx allen.png (no target)
+[81/124] SKIP: jolly groundskeeper.png (no target)
+Processing samples/lack of courage.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2986 pixels, DARK)
+Auto-selected threshold: 5 (2986 pixels, DARK watermark)
+Detected DARK watermark pattern (darker than background)
+Watermark region: 2986 pixels
+Removing watermark...
+Watermark features: std=30.8, bright%=0.2, edges=0.06
+Detected BRIGHT overlay (watermark=130.4 > background=122.4)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Saved to: test_output/lack of courage.png
+[82/124] ✓ lack of courage.png: 99.62%
+Processing samples/lawn sprinkler.png...
+Image size: (1024, 1024, 3)
+Full border detected (not L-pattern): opposite=625
+Detecting watermark...
+Auto-selected threshold: None (802 pixels, BRIGHT)
+Auto-selected threshold: 5 (802 pixels, BRIGHT watermark)
+Watermark region: 802 pixels
+Removing watermark...
+Watermark features: std=6.4, bright%=92.8, edges=0.12
+Detected BRIGHT overlay (watermark=211.9 > background=144.8)
+  Depth 2: α=0.499, inside=[245. 224. 173.], outside=[235. 193.  92.], samples=596
+  Depth 3: α=0.499, inside=[245. 224. 173.], outside=[235. 193.  92.], samples=510
+  Depth 4: α=0.499, inside=[245. 224. 173.], outside=[235. 193.  92.], samples=438
+  Depth 5: α=0.499, inside=[245. 224. 173.], outside=[235. 193.  92.], samples=372
+Selected alpha (median of 4 estimates): 0.499
+Saved to: test_output/lawn sprinkler.png
+[83/124] ✓ lawn sprinkler.png: 99.87%
+[84/124] SKIP: lesbian panic.png (no target)
+Processing samples/lobbygate.png...
+Image size: (1024, 1024, 3)
+Full border detected (not L-pattern): opposite=625
+Detecting watermark...
+Auto-selected threshold: None (721 pixels, BRIGHT)
+Auto-selected threshold: 5 (721 pixels, BRIGHT watermark)
+Watermark region: 721 pixels
+Removing watermark...
+Watermark features: std=9.0, bright%=89.0, edges=0.12
+Detected BRIGHT overlay (watermark=207.2 > background=120.5)
+  Depth 2: α=0.497, inside=[247. 223. 161.], outside=[239. 192.  67.], samples=508
+  Depth 3: α=0.497, inside=[247. 223. 161.], outside=[239. 192.  67.], samples=428
+  Depth 4: α=0.497, inside=[247. 223. 161.], outside=[239. 192.  67.], samples=360
+  Depth 5: α=0.497, inside=[247. 223. 161.], outside=[239. 192.  67.], samples=298
+Selected alpha (median of 4 estimates): 0.497
+Saved to: test_output/lobbygate.png
+[85/124] ✓ lobbygate.png: 99.88%
+[86/124] SKIP: local biker gang toxin cleaning service.png (no target)
+Processing samples/love in full flow.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (786 pixels, BRIGHT)
+Auto-selected threshold: 5 (786 pixels, BRIGHT watermark)
+Watermark region: 786 pixels
+Removing watermark...
+Watermark features: std=6.4, bright%=7.4, edges=0.09
+Detected BRIGHT overlay (watermark=192.2 > background=137.2)
+  Depth 2: α=0.382, inside=[224. 161. 187.], outside=[199.  111.5 149.5], samples=554
+  Depth 3: α=0.382, inside=[224. 161. 187.], outside=[199.  111.5 149.5], samples=466
+  Depth 4: α=0.382, inside=[224. 161. 187.], outside=[199.  111.5 149.5], samples=392
+  Depth 5: α=0.382, inside=[224. 161. 187.], outside=[199.  111.5 149.5], samples=328
+Selected alpha (median of 4 estimates): 0.382
+Saved to: test_output/love in full flow.png
+[87/124] ✓ love in full flow.png: 99.83%
+[88/124] SKIP: luxury pill mills.png (no target)
+[89/124] SKIP: mexican medicine.png (no target)
+Processing samples/molten home.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2667 pixels, BRIGHT)
+Auto-selected threshold: 5 (2667 pixels, BRIGHT watermark)
+Watermark region: 2667 pixels
+Removing watermark...
+Watermark features: std=17.5, bright%=89.8, edges=0.07
+Detected BRIGHT overlay (watermark=209.8 > background=198.1)
+  Depth 2: α=0.037, inside=[188. 224. 247.], outside=[188. 224. 246.], samples=2276
+  Depth 3: α=0.037, inside=[188. 224. 247.], outside=[188. 224. 246.], samples=2093
+  Depth 4: α=0.037, inside=[188. 224. 247.], outside=[188. 224. 246.], samples=1919
+  Depth 5: α=0.037, inside=[188. 224. 247.], outside=[188. 224. 246.], samples=1752
+Selected alpha (median of 4 estimates): 0.037
+Not enough edge pixels found, using mild correction
+Saved to: test_output/molten home.png
+[90/124] ✓ molten home.png: 99.70%
+[91/124] SKIP: money bay.png (no target)
+Processing samples/money swamp.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Border detected in edge samples (level=254.3), trying interior sampling...
+Auto-selected threshold: None (1304 pixels, DARK)
+Auto-selected threshold: 5 (1304 pixels, DARK watermark)
+Detected WHITE-OVERLAY-ON-DARK-ICON pattern (1303 pixels)
+Watermark region: 1304 pixels
+Removing watermark...
+Watermark features: std=53.3, bright%=1.8, edges=0.12
+Using WHITE-OVERLAY-ON-DARK-ICON removal strategy
+  Depth 2: α=0.052, inside=[108. 181. 191.], dark_ref=[107. 180. 181.], samples=885
+  Depth 3: α=0.056, inside=[108. 182. 191.], dark_ref=[107. 180. 181.], samples=689
+  Depth 4: α=0.056, inside=[108. 182. 191.], dark_ref=[107. 180. 181.], samples=502
+  Depth 5: α=0.056, inside=[108. 182. 191.], dark_ref=[107. 180. 181.], samples=324
+Selected alpha (median of 4 estimates): 0.056
+Using adaptive background estimation (high variance detected)
+Correcting 569 border pixels affected by watermark overlay
+Saved to: test_output/money swamp.png
+[92/124] ✓ money swamp.png: 99.69%
+Processing samples/monica's blue dress.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (3010 pixels, BRIGHT)
+Auto-selected threshold: 5 (3010 pixels, BRIGHT watermark)
+Watermark region: 3010 pixels
+Removing watermark...
+Watermark features: std=18.3, bright%=26.3, edges=0.06
+Detected BRIGHT overlay (watermark=180.4 > background=169.7)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Saved to: test_output/monica's blue dress.png
+[93/124] ✓ monica's blue dress.png: 99.58%
+Processing samples/mormon lake.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (611 pixels, BRIGHT)
+Auto-selected threshold: 5 (611 pixels, BRIGHT watermark)
+Detected additional watermark over dark border regions (+218 pixels)
+Watermark region: 829 pixels
+Removing watermark...
+Watermark features: std=39.5, bright%=73.7, edges=0.07
+Detected BRIGHT overlay (watermark=214.4 > background=138.1)
+  Depth 2: α=0.670, inside=[251. 244. 218.], outside=[228. 224. 179.], samples=538
+  Depth 3: α=0.670, inside=[251. 244. 218.], outside=[228. 224. 179.], samples=438
+  Depth 4: α=0.670, inside=[251. 244. 218.], outside=[228. 224. 179.], samples=358
+  Depth 5: α=0.670, inside=[251. 244. 218.], outside=[228. 224. 179.], samples=296
+Capping alpha from 0.670 to 0.53 (bright features detected)
+Selected alpha (median of 4 estimates): 0.530
+Using adaptive background estimation (high variance detected)
+Saved to: test_output/mormon lake.png
+[94/124] ✓ mormon lake.png: 99.87%
+Processing samples/murky wisdom.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=60/588 = 10.2%
+Detecting watermark...
+Auto-selected threshold: None (1785 pixels, BRIGHT)
+Auto-selected threshold: 5 (1785 pixels, BRIGHT watermark)
+Watermark region: 1785 pixels
+Removing watermark...
+Watermark features: std=40.2, bright%=34.0, edges=0.17
+Detected BRIGHT overlay (watermark=212.1 > background=92.8)
+  Depth 2: α=0.754, inside=[173. 220. 237.], outside=[ 38.  97. 125.], samples=971
+  Depth 3: α=0.893, inside=[227. 238. 244.], outside=[ 38.  97. 125.], samples=673
+  Depth 4: α=0.907, inside=[232. 240. 245.], outside=[ 38.  97. 125.], samples=536
+  Depth 5: α=0.913, inside=[234.5 241.  245. ], outside=[ 38.  97. 125.], samples=430
+Capping alpha from 0.900 to 0.53 (bright features detected)
+Selected alpha (median of 4 estimates): 0.530
+Using adaptive background estimation (high variance detected)
+Correcting 2670 border pixels affected by watermark overlay
+Saved to: test_output/murky wisdom.png
+[95/124] ✓ murky wisdom.png: 99.75%
+Processing samples/narcissism squared.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2832 pixels, BRIGHT)
+Auto-selected threshold: 5 (2832 pixels, BRIGHT watermark)
+Watermark region: 2832 pixels
+Removing watermark...
+Watermark features: std=36.6, bright%=84.9, edges=0.07
+Detected BRIGHT overlay (watermark=209.4 > background=173.9)
+  Depth 2: α=0.765, inside=[236.5 247.  250. ], outside=[154. 217. 239.], samples=2356
+  Depth 3: α=0.967, inside=[254. 254. 254.], outside=[154. 217. 239.], samples=2141
+  Depth 4: α=0.970, inside=[255. 254. 254.], outside=[154. 217. 239.], samples=1943
+  Depth 5: α=0.979, inside=[255. 255. 254.], outside=[154. 217. 239.], samples=1762
+Capping alpha from 0.969 to 0.53 (bright features detected)
+Selected alpha (median of 4 estimates): 0.530
+Using adaptive background estimation (high variance detected)
+Saved to: test_output/narcissism squared.png
+[96/124] ✓ narcissism squared.png: 99.73%
+Processing samples/nature's pyrotechnics.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=114/895 = 12.7%
+Detecting watermark...
+Border detected in edge samples (level=254.7), trying interior sampling...
+Auto-selected threshold: None (2002 pixels, DARK)
+Auto-selected threshold: 5 (2002 pixels, DARK watermark)
+Detected WHITE-OVERLAY-ON-DARK-ICON pattern (2001 pixels)
+Watermark region: 2002 pixels
+Removing watermark...
+Watermark features: std=81.9, bright%=2.8, edges=0.09
+Using WHITE-OVERLAY-ON-DARK-ICON removal strategy
+  Depth 2: α=0.716, inside=[103. 225. 221.], dark_ref=[1.   1.25 1.  ], samples=1583
+  Depth 3: α=0.715, inside=[103. 224. 221.], dark_ref=[1.   1.25 1.  ], samples=1387
+  Depth 4: α=0.713, inside=[103. 223. 220.], dark_ref=[1.   1.25 1.  ], samples=1200
+  Depth 5: α=0.515, inside=[103.  147.  145.5], dark_ref=[1.   1.25 1.  ], samples=1022
+Selected alpha (median of 4 estimates): 0.714
+Using adaptive background estimation (high variance detected)
+Correcting 2076 border pixels affected by watermark overlay
+Saved to: test_output/nature's pyrotechnics.png
+[97/124] ✓ nature's pyrotechnics.png: 99.82%
+Processing samples/og.png...
+Image size: (1024, 1024, 3)
+L-pattern detected: top_overlap=104, left_overlap=115, total_borders=735, concentrated=183
+Using template-based removal for L-pattern (874 template pixels)
+Saved to: test_output/og.png
+[98/124] ✓ og.png: 99.95%
+[99/124] SKIP: opinion storm.png (no target)
+[100/124] SKIP: overwhelming noise.png (no target)
+[101/124] SKIP: packet packet trailblazers.png (no target)
+[102/124] SKIP: poisonous sanctuary.png (no target)
+[103/124] SKIP: pompeii's financial ruin.png (no target)
+Processing samples/pretentious silence.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=228/1808 = 12.6%
+Detecting watermark...
+Auto-selected threshold: None (511 pixels, BRIGHT)
+Auto-selected threshold: 5 (511 pixels, BRIGHT watermark)
+Watermark region: 511 pixels
+Removing watermark...
+Watermark features: std=13.6, bright%=79.3, edges=0.23
+Detected BRIGHT overlay (watermark=203.3 > background=108.0)
+  Depth 2: α=0.578, inside=[244. 219. 168.], outside=[221. 174.  80.], samples=290
+  Depth 3: α=0.578, inside=[244. 219. 168.], outside=[221. 174.  80.], samples=217
+  Depth 4: α=0.578, inside=[244. 219. 168.], outside=[221. 174.  80.], samples=157
+  Depth 5: α=0.578, inside=[244. 219. 168.], outside=[221. 174.  80.], samples=108
+Capping alpha from 0.578 to 0.53 (bright features detected)
+Selected alpha (median of 4 estimates): 0.530
+Saved to: test_output/pretentious silence.png
+[104/124] ✓ pretentious silence.png: 99.86%
+[105/124] SKIP: purified pyre.png (no target)
+Processing samples/putin's underwater radar.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2596 pixels, BRIGHT)
+Auto-selected threshold: 5 (2596 pixels, BRIGHT watermark)
+Watermark region: 2596 pixels
+Removing watermark...
+Watermark features: std=35.9, bright%=76.5, edges=0.15
+Detected BRIGHT overlay (watermark=200.8 > background=198.2)
+Trying shallow depth for small watermark...
+Could not estimate alpha from edge comparison, using reasonable default
+Using adaptive background estimation (high variance detected)
+Saved to: test_output/putin's underwater radar.png
+[106/124] ✓ putin's underwater radar.png: 99.76%
+[107/124] SKIP: pyro overload.png (no target)
+[108/124] SKIP: renewable water.png (no target)
+[109/124] SKIP: retaliation.png (no target)
+[110/124] SKIP: roman abramovich.png (no target)
+[111/124] SKIP: romeo venting.png (no target)
+[112/124] SKIP: ronnie lane's grave.png (no target)
+[113/124] SKIP: ronnie lane.png (no target)
+[114/124] SKIP: rough exterior.png (no target)
+[115/124] SKIP: sakura hour.png (no target)
+[116/124] SKIP: smogged ash wastes.png (no target)
+[117/124] SKIP: smoking sarcophagus.png (no target)
+[118/124] SKIP: sprinkle saloon.png (no target)
+[119/124] SKIP: surfboard conference.png (no target)
+[120/124] SKIP: the infernal ding.png (no target)
+Processing samples/the punchline.png...
+Image size: (1024, 1024, 3)
+Detecting watermark...
+Auto-selected threshold: None (2140 pixels, DARK)
+Auto-selected threshold: 5 (2140 pixels, DARK watermark)
+Detected DARK watermark pattern (darker than background)
+Watermark region: 2140 pixels
+Removing watermark...
+Watermark features: std=12.3, bright%=0.0, edges=0.06
+Detected DARK overlay (watermark=108.0 < background=141.8)
+  Depth 2: α=0.006, inside=[ 77.  81. 151.], outside=[ 77.  82. 152.], samples=1532
+  Depth 3: α=0.006, inside=[ 77.  81. 151.], outside=[ 77.  82. 152.], samples=1253
+  Depth 4: α=0.006, inside=[ 77.  81. 151.], outside=[ 77.  82. 152.], samples=993
+  Depth 5: α=0.006, inside=[ 77.  81. 151.], outside=[ 77.  82. 152.], samples=755
+Selected alpha (median of 4 estimates): 0.006
+Not enough edge pixels found, using mild correction
+Saved to: test_output/the punchline.png
+[121/124] ✓ the punchline.png: 99.56%
+Processing samples/vintage shutters.png...
+Image size: (1024, 1024, 3)
+Full border detected (not L-pattern): opposite=625
+Detecting watermark...
+Auto-selected threshold: None (810 pixels, BRIGHT)
+Auto-selected threshold: 5 (810 pixels, BRIGHT watermark)
+Detected additional watermark over dark border regions (+88 pixels)
+Watermark region: 898 pixels
+Removing watermark...
+Watermark features: std=22.7, bright%=88.0, edges=0.11
+Detected BRIGHT overlay (watermark=212.2 > background=123.7)
+  Depth 2: α=0.484, inside=[248. 225. 188.], outside=[242. 196. 121.], samples=610
+  Depth 3: α=0.484, inside=[248. 225. 188.], outside=[242. 196. 121.], samples=519
+  Depth 4: α=0.484, inside=[248. 225. 188.], outside=[242. 196. 121.], samples=443
+  Depth 5: α=0.484, inside=[248. 225. 188.], outside=[242. 196. 121.], samples=375
+Selected alpha (median of 4 estimates): 0.484
+Saved to: test_output/vintage shutters.png
+[122/124] ✓ vintage shutters.png: 99.86%
+Processing samples/w3.png...
+Image size: (1024, 1024, 3)
+Scattered borders (not L-pattern): outer=48/355 = 13.5%
+Detecting watermark...
+Auto-selected threshold: None (847 pixels, BRIGHT)
+Auto-selected threshold: 5 (847 pixels, BRIGHT watermark)
+Watermark region: 847 pixels
+Removing watermark...
+Watermark features: std=19.4, bright%=0.0, edges=0.17
+Detected BRIGHT overlay (watermark=157.9 > background=60.6)
+  Depth 2: α=0.501, inside=[157. 158. 194.], outside=[ 58.5  62.  132. ], samples=615
+  Depth 3: α=0.501, inside=[157. 158. 194.], outside=[ 58.5  62.  132. ], samples=523
+  Depth 4: α=0.501, inside=[157. 158. 194.], outside=[ 58.5  62.  132. ], samples=443
+  Depth 5: α=0.501, inside=[157. 158. 194.], outside=[ 58.5  62.  132. ], samples=375
+Selected alpha (median of 4 estimates): 0.501
+Saved to: test_output/w3.png
+[123/124] ✓ w3.png: 99.72%
+[124/124] SKIP: wilhelm furtwangler.png (no target)
+
+============================================================
+SUMMARY
+============================================================
+Total images: 49
+Passing (>=97%): 49
+Failing (<97%): 0

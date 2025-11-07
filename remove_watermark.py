@@ -985,18 +985,22 @@ def remove_watermark(input_path, output_path=None, threshold=None):
         # that form substantial frames (> 500 pixels)
         has_border_frames = np.sum(very_dark) > 500 or np.sum(very_bright) > 500
 
-        # Don't apply border correction if the watermark itself was bright
-        # In that case, bright pixels in output are likely failed removal attempts,
-        # not border artifacts
+        # Don't apply border correction if the watermark itself was VERY bright
+        # AND the result still has very bright pixels (indicating failed removal)
+        # Otherwise, border correction is safe and helpful
         corner_original = img_array[y_start:, x_start:]
         watermark_pixels_original = corner_original[corner_mask]
         if len(watermark_pixels_original) > 0:
             watermark_brightness = np.mean(watermark_pixels_original)
-            if watermark_brightness > 200:
-                # Watermark was bright, don't apply border correction
+            # Only skip if watermark was very bright AND result still has bright artifacts
+            result_has_bright_artifacts = np.sum(corner_gray[corner_mask] > 220) > 100
+            if watermark_brightness > 230 and result_has_bright_artifacts:
+                # Watermark was very bright and removal failed, don't apply border correction
+                print(f"Skipping border correction (watermark brightness={watermark_brightness:.1f}, bright artifacts remain)")
                 has_border_frames = False
 
         if has_border_frames:
+            print(f"Border correction enabled (very_dark={np.sum(very_dark)}, very_bright={np.sum(very_bright)})")
             # Detect border pixels that may have been affected by watermark
             # These are pixels in the watermark region that should be part of the border
 
@@ -1034,8 +1038,9 @@ def remove_watermark(input_path, output_path=None, threshold=None):
                         border_correction_mask[:, x] |= (col < 150) | (col > 200)
 
             # Correct pixels that were in the watermark region OR are near watermark edges
-            # (captures anti-aliased pixels that are darker than background)
-            expanded_mask = ndimage.binary_dilation(corner_mask, iterations=3)
+            # (captures anti-aliased pixels and border pixels that are darker/brighter than background)
+            # Use larger expansion to catch border pixels further from watermark center
+            expanded_mask = ndimage.binary_dilation(corner_mask, iterations=10)
             border_correction_mask &= expanded_mask
 
             if np.sum(border_correction_mask) > 0:
