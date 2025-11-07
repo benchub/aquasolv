@@ -981,9 +981,9 @@ def remove_watermark(input_path, output_path=None, threshold=None):
         very_dark = corner_gray < 15
         very_bright = corner_gray > 240
 
-        # Only trigger for true black borders (< 15) or white borders (> 240)
-        # that form substantial frames (> 500 pixels)
-        has_border_frames = np.sum(very_dark) > 500 or np.sum(very_bright) > 500
+        # Trigger for black borders (< 15) or white borders (> 240)
+        # Threshold of 400 pixels balances catching thinner borders without over-correcting
+        has_border_frames = np.sum(very_dark) > 400 or np.sum(very_bright) > 400
 
         # Don't apply border correction if the watermark itself was VERY bright
         # AND the result still has very bright pixels (indicating failed removal)

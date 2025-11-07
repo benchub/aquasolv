@@ -1,0 +1,263 @@
+Comparing 224 images...
+
+[1/224] ✓ 0w.png: 98.50%
+[2/224] ✓ 5u.png: 99.50%
+[3/224] SKIP: a fossilized conversation.png (no target in desired/)
+[4/224] SKIP: a hoarder's paradise.png (no target in desired/)
+[5/224] SKIP: a ratings boost.png (no target in desired/)
+[6/224] SKIP: a riddle wrapped in a mystery.png (no target in desired/)
+[7/224] SKIP: a sacred legacy.png (no target in desired/)
+[8/224] SKIP: a staring contest.png (no target in desired/)
+[9/224] SKIP: abandoned shipwreck.png (no target in desired/)
+[10/224] SKIP: abyssal vent.png (no target in desired/)
+[11/224] SKIP: alewife.png (no target in desired/)
+[12/224] SKIP: an odyssey.png (no target in desired/)
+[13/224] ✗ apple ii.png: 94.08%
+[14/224] SKIP: aquaness squared.png (no target in desired/)
+[15/224] ✓ arch.png: 97.54%
+[16/224] SKIP: asteroid ice cream.png (no target in desired/)
+[17/224] SKIP: asthma britton.png (no target in desired/)
+[18/224] ✓ audience.png: 98.65%
+[19/224] ✓ aurora borealis planet.png: 97.41%
+[20/224] SKIP: barbecue conundrum.png (no target in desired/)
+[21/224] SKIP: bieber gate.png (no target in desired/)
+[22/224] SKIP: billiard balls.png (no target in desired/)
+[23/224] ✗ blasted farewell.png: 91.02%
+[24/224] SKIP: blazing stew.png (no target in desired/)
+[25/224] SKIP: boer.png (no target in desired/)
+[26/224] SKIP: brideshead eruption.png (no target in desired/)
+[27/224] SKIP: bull run.png (no target in desired/)
+[28/224] SKIP: burned dinners.png (no target in desired/)
+[29/224] ✗ buzz aldrin's warning.png: 89.38%
+[30/224] ✗ ca.png: 94.31%
+[31/224] SKIP: cash crop.png (no target in desired/)
+[32/224] SKIP: catfish hunter.png (no target in desired/)
+[33/224] ✓ ch.png: 99.98%
+[34/224] SKIP: chaos shield.png (no target in desired/)
+[35/224] SKIP: chaos squared.png (no target in desired/)
+[36/224] ✗ chaos tango.png: 76.43%
+[37/224] SKIP: chichicastenango market.png (no target in desired/)
+[38/224] SKIP: clear your conscience.png (no target in desired/)
+[39/224] ✗ climate groundhog.png: 92.80%
+[40/224] ✓ climate hell.png: 98.31%
+[41/224] ✓ coming full circle.png: 98.90%
+[42/224] SKIP: congressional legacy.png (no target in desired/)
+[43/224] SKIP: constant crisis.png (no target in desired/)
+[44/224] SKIP: crystal colonizers.png (no target in desired/)
+[45/224] SKIP: cyclone shield.png (no target in desired/)
+[46/224] SKIP: dark moon rising.png (no target in desired/)
+[47/224] ✗ democratic party's polls.png: 91.26%
+[48/224] SKIP: determined summit.png (no target in desired/)
+[49/224] SKIP: dixie crystals.png (no target in desired/)
+[50/224] ✗ double blockage.png: 96.51%
+[51/224] ✗ double cleanse.png: 95.60%
+[52/224] SKIP: double compound hell.png (no target in desired/)
+[53/224] SKIP: double coup.png (no target in desired/)
+[54/224] ✗ downward elegance.png: 93.97%
+[55/224] SKIP: dragon's trail.png (no target in desired/)
+[56/224] ✗ drainage terror.png: 94.31%
+[57/224] ✓ dystopian novel.png: 97.75%
+[58/224] ✓ earl's cove.png: 98.46%
+[59/224] SKIP: earthquake george.png (no target in desired/)
+[60/224] SKIP: ebola gate.png (no target in desired/)
+[61/224] SKIP: ecoliterate.png (no target in desired/)
+[62/224] SKIP: electric wave.png (no target in desired/)
+[63/224] SKIP: eurostar delay.png (no target in desired/)
+[64/224] SKIP: expos.png (no target in desired/)
+[65/224] SKIP: farmers' markets.png (no target in desired/)
+[66/224] SKIP: fashion frenzy.png (no target in desired/)
+[67/224] ✓ flying tiger.png: 99.19%
+[68/224] SKIP: france's sarkozy.png (no target in desired/)
+[69/224] SKIP: french quarter brawler.png (no target in desired/)
+[70/224] SKIP: galactic garbage gang.png (no target in desired/)
+[71/224] ✓ garbage wave theory.png: 97.35%
+[72/224] SKIP: gas stations.png (no target in desired/)
+[73/224] SKIP: gassy vortex.png (no target in desired/)
+[74/224] SKIP: general george rommel.png (no target in desired/)
+[75/224] SKIP: general hortense terra.png (no target in desired/)
+[76/224] SKIP: gibberish tides.png (no target in desired/)
+[77/224] ✗ glacier of debt.png: 96.27%
+[78/224] SKIP: glamorous mess.png (no target in desired/)
+[79/224] ✗ grant's march.png: 96.75%
+[80/224] ✗ graphic drowning.png: 87.33%
+[81/224] SKIP: grassley.png (no target in desired/)
+[82/224] SKIP: gray nomad.png (no target in desired/)
+[83/224] SKIP: green martian soda.png (no target in desired/)
+[84/224] SKIP: green tea evolution.png (no target in desired/)
+[85/224] SKIP: habitual hippie.png (no target in desired/)
+[86/224] ✓ hawaiian blend.png: 98.33%
+[87/224] ✓ healthcare.png: 97.49%
+[88/224] SKIP: helen hunt jackson.png (no target in desired/)
+[89/224] ✗ hell's lava.png: 93.69%
+[90/224] ✓ hellfire.png: 99.14%
+[91/224] SKIP: hidden city.png (no target in desired/)
+[92/224] ✓ hidden entitlements.png: 98.28%
+[93/224] SKIP: high on himself.png (no target in desired/)
+[94/224] ✗ hillary's health.png: 94.56%
+[95/224] SKIP: homeplate.png (no target in desired/)
+[96/224] SKIP: hybrid.png (no target in desired/)
+[97/224] SKIP: iceland's expat mayor.png (no target in desired/)
+[98/224] SKIP: icelandic pride.png (no target in desired/)
+[99/224] SKIP: instant lawn.png (no target in desired/)
+[100/224] SKIP: iron sheen.png (no target in desired/)
+[101/224] SKIP: j.k. rowling.png (no target in desired/)
+[102/224] SKIP: japanese fast food.png (no target in desired/)
+[103/224] SKIP: jazz storm.png (no target in desired/)
+[104/224] SKIP: joe lhota.png (no target in desired/)
+[105/224] SKIP: k-pop road rage.png (no target in desired/)
+[106/224] SKIP: kardashian craze.png (no target in desired/)
+[107/224] SKIP: kgb courier.png (no target in desired/)
+[108/224] ✗ lack of courage.png: 90.44%
+[109/224] SKIP: lack of progress.png (no target in desired/)
+[110/224] SKIP: last words.png (no target in desired/)
+[111/224] SKIP: lava of expectations.png (no target in desired/)
+[112/224] SKIP: lavender hill.png (no target in desired/)
+[113/224] ✓ lawn sprinkler.png: 98.48%
+[114/224] SKIP: leftist impact.png (no target in desired/)
+[115/224] SKIP: leonard's meteorite mishap.png (no target in desired/)
+[116/224] ✓ lobbygate.png: 97.87%
+[117/224] ✗ love in full flow.png: 91.23%
+[118/224] SKIP: lunar trauma.png (no target in desired/)
+[119/224] SKIP: lungfuls.png (no target in desired/)
+[120/224] SKIP: meteor hearth.png (no target in desired/)
+[121/224] SKIP: meteor madness.png (no target in desired/)
+[122/224] SKIP: midnight masochist.png (no target in desired/)
+[123/224] SKIP: mindshare.png (no target in desired/)
+[124/224] SKIP: mitterrand's legacy.png (no target in desired/)
+[125/224] SKIP: molten credit.png (no target in desired/)
+[126/224] ✗ molten home.png: 73.48%
+[127/224] ✗ money swamp.png: 93.38%
+[128/224] ✗ monica's blue dress.png: 89.02%
+[129/224] SKIP: more fallow ground.png (no target in desired/)
+[130/224] SKIP: more rogue waves.png (no target in desired/)
+[131/224] ✓ mormon lake.png: 97.46%
+[132/224] SKIP: moroccan soap opera.png (no target in desired/)
+[133/224] SKIP: muddy sea witch.png (no target in desired/)
+[134/224] ✗ murky wisdom.png: 84.96%
+[135/224] SKIP: mystery machine.png (no target in desired/)
+[136/224] ✗ narcissism squared.png: 94.86%
+[137/224] ✗ nature's pyrotechnics.png: 83.04%
+[138/224] SKIP: neil de grasse tyson.png (no target in desired/)
+[139/224] SKIP: neil's squid.png (no target in desired/)
+[140/224] SKIP: obvious gnome.png (no target in desired/)
+[141/224] SKIP: ocean salvage.png (no target in desired/)
+[142/224] SKIP: ocean's heartbeat.png (no target in desired/)
+[143/224] SKIP: oceansgate.png (no target in desired/)
+[144/224] ✓ og.png: 99.64%
+[145/224] SKIP: old planter.png (no target in desired/)
+[146/224] SKIP: ophelia's flowers.png (no target in desired/)
+[147/224] SKIP: pacific lava.png (no target in desired/)
+[148/224] SKIP: party pooper subs.png (no target in desired/)
+[149/224] SKIP: patriot act.png (no target in desired/)
+[150/224] SKIP: patton's lip service.png (no target in desired/)
+[151/224] SKIP: press briefing.png (no target in desired/)
+[152/224] ✗ pretentious silence.png: 95.88%
+[153/224] ✗ putin's underwater radar.png: 85.96%
+[154/224] SKIP: pyroshaping.png (no target in desired/)
+[155/224] SKIP: quasimodo.png (no target in desired/)
+[156/224] SKIP: randy couture.png (no target in desired/)
+[157/224] SKIP: rashida rashida.png (no target in desired/)
+[158/224] SKIP: reburned pizza.png (no target in desired/)
+[159/224] SKIP: recurring.png (no target in desired/)
+[160/224] SKIP: reflections of flight.png (no target in desired/)
+[161/224] SKIP: regeneration blaze.png (no target in desired/)
+[162/224] SKIP: relationship rust.png (no target in desired/)
+[163/224] SKIP: research funding.png (no target in desired/)
+[164/224] SKIP: rob zombie.png (no target in desired/)
+[165/224] SKIP: romney.png (no target in desired/)
+[166/224] SKIP: rotten ritual.png (no target in desired/)
+[167/224] SKIP: royal ribbit.png (no target in desired/)
+[168/224] SKIP: rugged romantic.png (no target in desired/)
+[169/224] SKIP: ruins of hamburg.png (no target in desired/)
+[170/224] SKIP: rusty beacon.png (no target in desired/)
+[171/224] SKIP: schatzkammer.png (no target in desired/)
+[172/224] SKIP: sea salt.png (no target in desired/)
+[173/224] SKIP: sea senator.png (no target in desired/)
+[174/224] SKIP: sewer scandal.png (no target in desired/)
+[175/224] SKIP: sexy hydropower.png (no target in desired/)
+[176/224] SKIP: shameful silence.png (no target in desired/)
+[177/224] SKIP: shipwreck haven.png (no target in desired/)
+[178/224] SKIP: shirley muldowney.png (no target in desired/)
+[179/224] SKIP: siamese tragedy.png (no target in desired/)
+[180/224] SKIP: silent depth.png (no target in desired/)
+[181/224] SKIP: slippery reasoning.png (no target in desired/)
+[182/224] SKIP: soil squire.png (no target in desired/)
+[183/224] SKIP: solid rebirth.png (no target in desired/)
+[184/224] SKIP: somewhere in scotland.png (no target in desired/)
+[185/224] SKIP: space homer.png (no target in desired/)
+[186/224] SKIP: stale vendetta.png (no target in desired/)
+[187/224] SKIP: stellar leadership.png (no target in desired/)
+[188/224] SKIP: striking.png (no target in desired/)
+[189/224] SKIP: submerged sitcom.png (no target in desired/)
+[190/224] SKIP: sushi apocalypse.png (no target in desired/)
+[191/224] SKIP: sustainable stomp.png (no target in desired/)
+[192/224] SKIP: sweaty ship of despair.png (no target in desired/)
+[193/224] SKIP: tentacled timekeeper.png (no target in desired/)
+[194/224] ✗ the punchline.png: 71.45%
+[195/224] SKIP: the singularity singularity singularity.png (no target in desired/)
+[196/224] SKIP: threatened coast.png (no target in desired/)
+[197/224] SKIP: toasted plains.png (no target in desired/)
+[198/224] SKIP: tobias harris.png (no target in desired/)
+[199/224] SKIP: tomb of unity.png (no target in desired/)
+[200/224] SKIP: tossed topic.png (no target in desired/)
+[201/224] SKIP: toxic tune.png (no target in desired/)
+[202/224] SKIP: trampoline accident.png (no target in desired/)
+[203/224] SKIP: transformed ruins.png (no target in desired/)
+[204/224] SKIP: transparent progress.png (no target in desired/)
+[205/224] SKIP: tsunami general.png (no target in desired/)
+[206/224] SKIP: unbreakable blaze.png (no target in desired/)
+[207/224] SKIP: university lecture.png (no target in desired/)
+[208/224] SKIP: valdez oil spill.png (no target in desired/)
+[209/224] SKIP: valentine's day on mars.png (no target in desired/)
+[210/224] SKIP: venusian goddess getaway.png (no target in desired/)
+[211/224] SKIP: vfw.png (no target in desired/)
+[212/224] SKIP: viking toilet.png (no target in desired/)
+[213/224] ✓ vintage shutters.png: 98.42%
+[214/224] ✗ w3.png: 96.76%
+[215/224] SKIP: warmonger's hearth.png (no target in desired/)
+[216/224] SKIP: wasteland bites.png (no target in desired/)
+[217/224] SKIP: watch.png (no target in desired/)
+[218/224] SKIP: waves of disdain.png (no target in desired/)
+[219/224] SKIP: wildflower chaos.png (no target in desired/)
+[220/224] SKIP: wine connoisseur.png (no target in desired/)
+[221/224] SKIP: x games.png (no target in desired/)
+[222/224] SKIP: yankees pitching.png (no target in desired/)
+[223/224] SKIP: ytterbium.png (no target in desired/)
+[224/224] SKIP: zapruder.png (no target in desired/)
+
+============================================================
+SUMMARY
+============================================================
+Total images: 49
+Passing (>=97%): 21
+Failing (<97%): 28
+
+Failing images:
+   71.45% - the punchline.png
+   73.48% - molten home.png
+   76.43% - chaos tango.png
+   83.04% - nature's pyrotechnics.png
+   84.96% - murky wisdom.png
+   85.96% - putin's underwater radar.png
+   87.33% - graphic drowning.png
+   89.02% - monica's blue dress.png
+   89.38% - buzz aldrin's warning.png
+   90.44% - lack of courage.png
+   91.02% - blasted farewell.png
+   91.23% - love in full flow.png
+   91.26% - democratic party's polls.png
+   92.80% - climate groundhog.png
+   93.38% - money swamp.png
+   93.69% - hell's lava.png
+   93.97% - downward elegance.png
+   94.08% - apple ii.png
+   94.31% - drainage terror.png
+   94.31% - ca.png
+   94.56% - hillary's health.png
+   94.86% - narcissism squared.png
+   95.60% - double cleanse.png
+   95.88% - pretentious silence.png
+   96.27% - glacier of debt.png
+   96.51% - double blockage.png
+   96.75% - grant's march.png
+   96.76% - w3.png
