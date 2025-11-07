@@ -1521,22 +1521,21 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         # Decide which algorithms to try based on characteristics
         algorithms_to_try = []
 
-        # BALANCED APPROACH: If alpha-based quality is good (>= 92), don't try alternatives
-        # This prevents regressions on images where alpha-based already works well
-        # Analysis shows:
-        # - Most regressed images have alpha quality 90-92 where OpenCV scores higher but performs worse
-        # - Many passing images have quality 86-91 but alpha still works best
-        # Using threshold of 92 as a balance point
-        if quality['overall'] >= 92:
-            # Alpha is good, skip alternatives to prevent regression
-            algorithms_to_try = []
-            print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
-        elif is_colored_border_case:
+        # PRIORITY 1: Colored border case - ALWAYS use exemplar regardless of quality score
+        # These images have uniform colored areas where exemplar achieves near-perfect results
+        # Must check BEFORE quality threshold to avoid skipping
+        if is_colored_border_case:
             # Colored borders (apple ii, hillary's health): Use ONLY exemplar
             # These images have uniform colored areas where watermark should be replaced with neighbors
             # OpenCV methods score higher on quality but produce worse actual results (blurring)
             algorithms_to_try = ['exemplar']
             print("Strategy: Colored borders detected -> exemplar only (uniform area replacement)")
+        # PRIORITY 2: High quality alpha - don't try alternatives to prevent regression
+        elif quality['overall'] >= 92:
+            # Alpha is good, skip alternatives to prevent regression
+            # Analysis shows most regressed images have alpha quality 90-92 where OpenCV scores higher but performs worse
+            algorithms_to_try = []
+            print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
         elif bg_variance < 20 and quality['overall'] < 95:
             # LOW variance (uniform area like hellfire's black border) + low quality: Use exemplar
             # The watermark is in a uniform area and can be filled with nearby pixels
@@ -1560,7 +1559,12 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
 
         # Store all results: (algorithm_name, cleaned_image, quality_score)
-        results = [('alpha', cleaned, quality)]
+        # IMPORTANT: For colored_border_case, don't include alpha in comparison!
+        # Exemplar is always better for uniform colored areas, but quality metrics favor alpha
+        if is_colored_border_case:
+            results = []  # Start with empty list, only add algorithms we try
+        else:
+            results = [('alpha', cleaned, quality)]  # Include alpha as baseline
 
         # Try each selected algorithm
         for algo in algorithms_to_try:
