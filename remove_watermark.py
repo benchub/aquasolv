@@ -167,6 +167,109 @@ def exemplar_inpaint_watermark(img_array, template_mask):
     return result
 
 
+def segmented_inpaint_watermark(img_array, template_mask):
+    """
+    Segmentation-based inpainting: detect color boundaries within the watermark
+    and fill each segment independently from its local neighbors.
+
+    This handles cases like 'climate hell' where the watermark crosses multiple
+    distinct color regions (e.g., black border + orange background). Color shifts
+    act as barriers, and each segment gets filled with colors from neighbors on
+    the same side of the barrier.
+
+    Args:
+        img_array: Original image array
+        template_mask: Boolean mask of watermark pixels (from template)
+
+    Returns:
+        Inpainted image array
+    """
+    from scipy.ndimage import label, binary_dilation
+    from skimage.segmentation import felzenszwalb
+
+    height, width = img_array.shape[:2]
+    corner_size = 100
+    y_start = height - corner_size
+    x_start = width - corner_size
+
+    result = img_array.copy()
+    corner = result[y_start:, x_start:].copy()
+
+    # Step 1: Segment the watermark area based on color similarity
+    # Use Felzenszwalb segmentation on the watermark pixels
+    # This detects color boundaries within the watermark
+    watermark_corner = corner.copy()
+
+    # Run segmentation on the corner area
+    # scale controls size of segments (higher = larger segments)
+    # sigma is Gaussian smoothing before segmentation
+    # min_size is minimum segment size in pixels
+    segments = felzenszwalb(watermark_corner, scale=100, sigma=0.5, min_size=50)
+
+    # Ensure template_mask is boolean
+    template_mask_bool = template_mask.astype(bool)
+
+    # Step 2: For each segment within the watermark, fill with nearby non-watermark pixels
+    unique_segments = np.unique(segments[template_mask_bool])
+
+    print(f"  Found {len(unique_segments)} color segments in watermark area")
+
+    for segment_id in unique_segments:
+        # Get pixels in this segment that are also in watermark
+        segment_mask = (segments == segment_id) & template_mask_bool
+
+        if not np.any(segment_mask):
+            continue
+
+        # Find the boundary pixels of this segment (pixels just outside watermark)
+        # Dilate the segment mask to get neighbors
+        dilated_segment = binary_dilation(segment_mask, iterations=3)
+
+        # Boundary is: (pixels near segment) AND (not in watermark)
+        boundary_mask = dilated_segment & ~template_mask_bool
+
+        if not np.any(boundary_mask):
+            # No boundary found, fall back to any non-watermark pixels
+            boundary_mask = ~template_mask_bool
+
+        # Get boundary pixel colors
+        boundary_pixels = corner[boundary_mask]
+
+        if len(boundary_pixels) > 0:
+            # Fill this segment with the median color of boundary pixels
+            # Median is more robust to outliers than mean
+            fill_color = np.median(boundary_pixels, axis=0)
+
+            # For each pixel in this segment, use weighted average of nearby boundary pixels
+            segment_coords = np.argwhere(segment_mask)
+            boundary_coords = np.argwhere(boundary_mask)
+
+            for sy, sx in segment_coords:
+                # Find distances to all boundary pixels
+                distances = np.sqrt(np.sum((boundary_coords - np.array([sy, sx]))**2, axis=1))
+
+                # Use only the closest 5 boundary pixels for efficiency
+                closest_indices = np.argsort(distances)[:5]
+                closest_distances = distances[closest_indices]
+
+                if len(closest_distances) > 0 and closest_distances[0] < 50:
+                    # Weight by inverse distance
+                    weights = 1.0 / (closest_distances + 1)
+                    weights = weights / weights.sum()
+
+                    # Get colors of closest boundary pixels
+                    closest_colors = boundary_pixels[closest_indices]
+
+                    # Weighted average
+                    corner[sy, sx] = np.average(closest_colors, axis=0, weights=weights)
+                else:
+                    # Too far from boundary, use median fill color
+                    corner[sy, sx] = fill_color
+
+    result[y_start:, x_start:] = corner
+    return result
+
+
 def opencv_inpaint_watermark(img_array, template_mask, method='telea'):
     """
     Use OpenCV's inpainting algorithms to remove watermark.
@@ -1572,9 +1675,10 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             algorithms_to_try = ['exemplar', 'opencv_telea']
             print(f"Strategy: Uniform background (variance={bg_variance:.1f}) + low quality -> exemplar + fallback")
         elif bg_variance > 50 and quality['overall'] < 95:
-            # High variance/textured background AND low quality: OpenCV methods may help
-            algorithms_to_try = ['opencv_telea', 'opencv_ns']
-            print(f"Strategy: High variance background + low quality ({quality['overall']:.1f}) -> OpenCV methods")
+            # High variance/textured background AND low quality: Try segmented + OpenCV methods
+            # Segmented works well when watermark crosses multiple color regions
+            algorithms_to_try = ['segmented', 'opencv_telea', 'opencv_ns']
+            print(f"Strategy: High variance background + low quality ({quality['overall']:.1f}) -> Segmented + OpenCV methods")
         elif quality['overall'] < 95 or quality['smoothness'] < 90:
             # Low quality alpha result: Try OpenCV methods
             algorithms_to_try = ['opencv_telea', 'exemplar']
@@ -1602,6 +1706,8 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             try:
                 if algo == 'exemplar':
                     cleaned_algo = exemplar_inpaint_watermark(img_array, template_mask)
+                elif algo == 'segmented':
+                    cleaned_algo = segmented_inpaint_watermark(img_array, template_mask)
                 elif algo == 'opencv_telea':
                     cleaned_algo = opencv_inpaint_watermark(img_array, template_mask, 'telea')
                 elif algo == 'opencv_ns':
