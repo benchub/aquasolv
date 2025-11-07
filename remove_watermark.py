@@ -1119,30 +1119,68 @@ def remove_watermark_core(img_array, threshold=None):
                 for y in range(corner_size):
                     for x in range(corner_size):
                         if border_correction_mask[y, x]:
+                            current_val = corner_gray[y, x]
+
                             # Find nearest non-watermark pixel in the same row or column
                             # to determine the border color
 
                             # Check row
                             row_colors = []
+                            row_very_dark = []
+                            row_very_bright = []
                             for dx in range(-10, 11):
                                 nx = x + dx
                                 if 0 <= nx < corner_size and not corner_mask[y, nx]:
-                                    # Accept dark borders (<100) or very bright borders (>230)
-                                    if corner_gray[y, nx] < 100 or corner_gray[y, nx] > 230:
+                                    pixel_val = corner_gray[y, nx]
+                                    # Collect very dark (<50) and very bright (>230) separately
+                                    if pixel_val < 50:
+                                        row_very_dark.append(corner_cleaned[y, nx])
+                                    elif pixel_val > 230:
+                                        row_very_bright.append(corner_cleaned[y, nx])
+                                    # Also accept moderately dark/bright for fallback
+                                    if pixel_val < 100 or pixel_val > 200:
                                         row_colors.append(corner_cleaned[y, nx])
 
                             # Check column
                             col_colors = []
+                            col_very_dark = []
+                            col_very_bright = []
                             for dy in range(-10, 11):
                                 ny = y + dy
                                 if 0 <= ny < corner_size and not corner_mask[ny, x]:
-                                    # Accept dark borders (<100) or very bright borders (>230)
-                                    if corner_gray[ny, x] < 100 or corner_gray[ny, x] > 230:
+                                    pixel_val = corner_gray[ny, x]
+                                    # Collect very dark (<50) and very bright (>230) separately
+                                    if pixel_val < 50:
+                                        col_very_dark.append(corner_cleaned[ny, x])
+                                    elif pixel_val > 230:
+                                        col_very_bright.append(corner_cleaned[ny, x])
+                                    # Also accept moderately dark/bright for fallback
+                                    if pixel_val < 100 or pixel_val > 200:
                                         col_colors.append(corner_cleaned[ny, x])
 
-                            # Use the border color if found
-                            if len(row_colors) > 0 or len(col_colors) > 0:
-                                all_colors = row_colors + col_colors
+                            # Prioritize very dark/bright pixels (true borders)
+                            all_very_dark = row_very_dark + col_very_dark
+                            all_very_bright = row_very_bright + col_very_bright
+                            all_colors = row_colors + col_colors
+
+                            # If this is a gray pixel (100-180) and we found black borders nearby, snap to black
+                            if 100 <= current_val <= 180 and len(all_very_dark) > 0:
+                                corner_cleaned[y, x] = 0  # Snap to black
+                            # If this is a gray-ish pixel and we found white borders nearby, snap to white
+                            elif 180 < current_val < 230 and len(all_very_bright) > 0:
+                                corner_cleaned[y, x] = 255  # Snap to white
+                            # If gray (100-180) and we have ANY dark borders nearby (< 100), snap to black
+                            elif 100 <= current_val <= 180 and len(all_colors) > 0:
+                                border_vals = [np.mean(c) for c in all_colors]
+                                avg_border = np.mean(border_vals)
+                                # If nearby borders are dark (< 100), this is likely a black border
+                                if avg_border < 100:
+                                    corner_cleaned[y, x] = 0  # Snap to black
+                                else:
+                                    border_color = np.median(all_colors, axis=0)
+                                    corner_cleaned[y, x] = border_color
+                            # Otherwise use median of nearby border colors
+                            elif len(all_colors) > 0:
                                 border_color = np.median(all_colors, axis=0)
                                 corner_cleaned[y, x] = border_color
 
