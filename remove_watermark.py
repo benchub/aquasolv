@@ -1070,6 +1070,97 @@ def remove_watermark_core(img_array, threshold=None):
 
         if has_border_frames:
             print(f"Border correction enabled (very_dark={np.sum(very_dark)}, very_bright={np.sum(very_bright)})")
+
+            # STRATEGY 1: Check if we can use template-based watermark region
+            # This tells us exactly where the watermark is (not where we detected it)
+            watermark_template = get_watermark_template()
+            if watermark_template is not None:
+                template_mask = watermark_template > 0.01
+                # Use template to know exact watermark region
+                # Watermark is centered at (43.5, 43.5), size 48x48
+                print(f"Using watermark template for precise border correction")
+            else:
+                template_mask = None
+
+            # STRATEGY 2: Detect if background is uniform (single color or gradient)
+            # If so, we can just redraw borders over the watermark area
+            # Sample non-watermark areas to check uniformity
+            non_watermark = corner_gray[~corner_mask]
+            if len(non_watermark) > 100:
+                bg_std = np.std(non_watermark)
+                bg_median = np.median(non_watermark)
+                is_uniform_bg = bg_std < 15  # Low variance = uniform background
+
+                if is_uniform_bg:
+                    print(f"Detected uniform background (std={bg_std:.1f}), using border overdraw strategy")
+
+                    # Find all borders (continuous lines of dark/bright pixels)
+                    # Then just redraw them over the watermark region
+                    border_lines = np.zeros((corner_size, corner_size), dtype=bool)
+
+                    # Detect horizontal borders (rows with many dark/bright edge pixels)
+                    for y in range(corner_size):
+                        row = corner_gray[y, :]
+                        # Check if this row is a border (has many dark or bright pixels)
+                        is_dark_border = np.sum(row < 100) > 30
+                        is_bright_border = np.sum(row > 200) > 30
+                        if is_dark_border or is_bright_border:
+                            border_lines[y, :] = True
+
+                    # Detect vertical borders (columns with many dark/bright edge pixels)
+                    for x in range(corner_size):
+                        col = corner_gray[:, x]
+                        is_dark_border = np.sum(col < 100) > 30
+                        is_bright_border = np.sum(col > 200) > 30
+                        if is_dark_border or is_bright_border:
+                            border_lines[:, x] = True
+
+                    # For pixels that are (border AND in watermark region), redraw the border
+                    if template_mask is not None:
+                        border_in_watermark = border_lines & template_mask
+                    else:
+                        border_in_watermark = border_lines & corner_mask
+
+                    if np.sum(border_in_watermark) > 0:
+                        print(f"Redrawing {np.sum(border_in_watermark)} border pixels over watermark")
+
+                        # For each border pixel, find the border color from non-watermark parts of same line
+                        for y in range(corner_size):
+                            for x in range(corner_size):
+                                if border_in_watermark[y, x]:
+                                    # Get border color from same row/column outside watermark
+                                    row_samples = []
+                                    for dx in range(-20, 21):
+                                        nx = x + dx
+                                        if 0 <= nx < corner_size:
+                                            if template_mask is not None:
+                                                is_outside = not template_mask[y, nx]
+                                            else:
+                                                is_outside = not corner_mask[y, nx]
+                                            if is_outside and border_lines[y, nx]:
+                                                row_samples.append(corner_cleaned[y, nx])
+
+                                    col_samples = []
+                                    for dy in range(-20, 21):
+                                        ny = y + dy
+                                        if 0 <= ny < corner_size:
+                                            if template_mask is not None:
+                                                is_outside = not template_mask[ny, x]
+                                            else:
+                                                is_outside = not corner_mask[ny, x]
+                                            if is_outside and border_lines[ny, x]:
+                                                col_samples.append(corner_cleaned[ny, x])
+
+                                    all_samples = row_samples + col_samples
+                                    if len(all_samples) > 0:
+                                        border_color = np.median(all_samples, axis=0)
+                                        corner_cleaned[y, x] = border_color
+
+                        # Update and skip traditional border correction
+                        cleaned[y_start:, x_start:] = corner_cleaned
+                        has_border_frames = False  # Skip traditional correction
+
+            # STRATEGY 3: Traditional border correction with intelligence
             # Detect border pixels that may have been affected by watermark
             # These are pixels in the watermark region that should be part of the border
 
@@ -1176,13 +1267,20 @@ def remove_watermark_core(img_array, threshold=None):
                                 # If nearby borders are dark (< 100), this is likely a black border
                                 if avg_border < 100:
                                     corner_cleaned[y, x] = 0  # Snap to black
-                                else:
+                                # Only apply border color if it would make pixel darker (fixing over-brightening)
+                                # Don't brighten pixels - that would be wrong
+                                elif avg_border < current_val - 10:
                                     border_color = np.median(all_colors, axis=0)
                                     corner_cleaned[y, x] = border_color
-                            # Otherwise use median of nearby border colors
+                            # Otherwise use median of nearby border colors, but only if it makes sense
                             elif len(all_colors) > 0:
-                                border_color = np.median(all_colors, axis=0)
-                                corner_cleaned[y, x] = border_color
+                                border_vals = [np.mean(c) for c in all_colors]
+                                avg_border = np.mean(border_vals)
+                                # Only snap if border is significantly darker OR similar
+                                # Don't brighten pixels (that indicates we're snapping to wrong border)
+                                if avg_border < current_val + 20:
+                                    border_color = np.median(all_colors, axis=0)
+                                    corner_cleaned[y, x] = border_color
 
                 # Update the main cleaned array
                 cleaned[y_start:, x_start:] = corner_cleaned
