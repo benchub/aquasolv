@@ -19,6 +19,105 @@ from scipy import ndimage
 import os
 
 
+def assess_removal_quality(cleaned_corner, mask_corner):
+    """
+    Assess the quality of watermark removal in the corner region.
+    Returns a score from 0-100 where higher is better.
+
+    Quality criteria:
+    - Smoothness within uniform regions (no noisy artifacts)
+    - Sharp edges preserved (legitimate lines/borders remain crisp)
+    - Local consistency (pixels match neighbors unless there's an edge)
+    """
+    corner_gray = np.mean(cleaned_corner, axis=2)
+
+    # Detect edges using Sobel operator (legitimate features to preserve)
+    sobel_h = ndimage.sobel(corner_gray, axis=0)
+    sobel_v = ndimage.sobel(corner_gray, axis=1)
+    edge_magnitude = np.sqrt(sobel_h**2 + sobel_v**2)
+    # Strong edges (legitimate lines/borders)
+    is_edge = edge_magnitude > 20
+
+    # Within the previously-watermarked region, assess quality
+    watermark_region = mask_corner.copy()
+
+    # 1. Smoothness score: measure local variance in non-edge areas
+    # Good removal = low variance in flat areas
+    smoothness_scores = []
+    for y in range(2, 98):
+        for x in range(2, 98):
+            if watermark_region[y, x] and not is_edge[y, x]:
+                # Look at 5x5 neighborhood
+                neighborhood = corner_gray[y-2:y+3, x-2:x+3]
+                local_std = np.std(neighborhood)
+                # Lower std = smoother = better (score closer to 1)
+                smoothness = np.exp(-local_std / 10)
+                smoothness_scores.append(smoothness)
+
+    if len(smoothness_scores) > 0:
+        smoothness_score = np.mean(smoothness_scores) * 100
+    else:
+        smoothness_score = 50  # Neutral if no non-edge pixels
+
+    # 2. Consistency score: measure gradient changes across watermark boundary
+    # Good removal = smooth transition at edges
+    consistency_scores = []
+
+    # Find boundary pixels (watermark pixels adjacent to non-watermark)
+    dilated = ndimage.binary_dilation(watermark_region, iterations=1)
+    boundary = dilated & ~watermark_region
+
+    for y, x in zip(*np.where(boundary)):
+        if 3 < y < 96 and 3 < x < 96:
+            # Compare this boundary pixel with watermark pixels next to it
+            inside_neighbors = []
+            for dy, dx in [(-1,0), (1,0), (0,-1), (0,1)]:
+                ny, nx = y + dy, x + dx
+                if watermark_region[ny, nx]:
+                    inside_neighbors.append(corner_gray[ny, nx])
+
+            if len(inside_neighbors) > 0:
+                boundary_val = corner_gray[y, x]
+                mean_inside = np.mean(inside_neighbors)
+                # Good if boundary and inside are similar
+                diff = abs(boundary_val - mean_inside)
+                consistency = np.exp(-diff / 20)
+                consistency_scores.append(consistency)
+
+    if len(consistency_scores) > 0:
+        consistency_score = np.mean(consistency_scores) * 100
+    else:
+        consistency_score = 50
+
+    # 3. Edge preservation score: edges should still be sharp
+    edge_quality_scores = []
+    for y, x in zip(*np.where(watermark_region & is_edge)):
+        # Edge strength at this pixel
+        strength = edge_magnitude[y, x]
+        # Good edges are strong (>30)
+        edge_quality = min(strength / 50, 1.0)
+        edge_quality_scores.append(edge_quality)
+
+    if len(edge_quality_scores) > 0:
+        edge_score = np.mean(edge_quality_scores) * 100
+    else:
+        edge_score = 100  # No edges = perfect edge preservation
+
+    # Combined score: weight smoothness heavily, consistency moderately, edges lightly
+    overall_score = (
+        smoothness_score * 0.5 +
+        consistency_score * 0.3 +
+        edge_score * 0.2
+    )
+
+    return {
+        'overall': overall_score,
+        'smoothness': smoothness_score,
+        'consistency': consistency_score,
+        'edge_preservation': edge_score
+    }
+
+
 def analyze_watermark_features(img_array, mask):
     """
     Analyze features of the detected watermark region to determine
@@ -1082,6 +1181,15 @@ def remove_watermark(input_path, output_path=None, threshold=None):
 
     # Clamp values to valid range
     cleaned = np.clip(cleaned, 0, 255).astype(np.uint8)
+
+    # Assess removal quality
+    corner_size = 100
+    cleaned_corner = cleaned[height - corner_size:, width - corner_size:]
+    mask_corner = mask[height - corner_size:, width - corner_size:]
+
+    if np.sum(mask_corner) > 50:  # Only assess if watermark was detected
+        quality = assess_removal_quality(cleaned_corner, mask_corner)
+        print(f"Quality: overall={quality['overall']:.1f}, smooth={quality['smoothness']:.1f}, consistent={quality['consistency']:.1f}, edges={quality['edge_preservation']:.1f}")
 
     # Save result
     if output_path is None:
