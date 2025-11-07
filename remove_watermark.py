@@ -119,10 +119,10 @@ def assess_removal_quality(cleaned_corner, mask_corner):
     }
 
 
-def opencv_inpaint_watermark(img_array, template_mask):
+def exemplar_inpaint_watermark(img_array, template_mask):
     """
-    Use OpenCV's inpainting algorithms to remove watermark.
-    This is a fallback for cases where alpha-based removal fails.
+    Use exemplar-based inpainting (weighted averaging from nearby pixels).
+    Best for colored borders and uniform areas.
 
     Args:
         img_array: Original image array
@@ -136,23 +136,66 @@ def opencv_inpaint_watermark(img_array, template_mask):
     y_start = height - corner_size
     x_start = width - corner_size
 
-    # Create a copy to inpaint
+    result = img_array.copy()
+    corner = result[y_start:, x_start:].copy()
+
+    # For each watermark pixel, find nearest non-watermark pixels
+    for y in range(corner_size):
+        for x in range(corner_size):
+            if template_mask[y, x]:
+                # Find nearest non-watermark pixels in same row/column
+                samples = []
+                weights = []
+
+                # Search in all 4 directions
+                for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    for dist in range(1, 30):  # Search up to 30 pixels away
+                        ny, nx = y + dy * dist, x + dx * dist
+                        if 0 <= ny < corner_size and 0 <= nx < corner_size:
+                            if not template_mask[ny, nx]:
+                                samples.append(corner[ny, nx])
+                                weights.append(1.0 / (dist + 1))  # Inverse distance weighting
+                                break
+
+                # Use weighted average of samples
+                if len(samples) > 0:
+                    weights_array = np.array(weights)
+                    weights_array = weights_array / weights_array.sum()  # Normalize
+                    corner[y, x] = np.average(samples, axis=0, weights=weights_array)
+
+    result[y_start:, x_start:] = corner
+    return result
+
+
+def opencv_inpaint_watermark(img_array, template_mask, method='telea'):
+    """
+    Use OpenCV's inpainting algorithms to remove watermark.
+
+    Args:
+        img_array: Original image array
+        template_mask: Boolean mask of watermark pixels (from template)
+        method: 'telea' or 'ns' (Navier-Stokes)
+
+    Returns:
+        Inpainted image array
+    """
+    height, width = img_array.shape[:2]
+    corner_size = 100
+    y_start = height - corner_size
+    x_start = width - corner_size
+
     result = img_array.copy()
     corner = result[y_start:, x_start:].copy()
 
     # Convert mask to uint8 format (required by OpenCV)
     mask_uint8 = (template_mask * 255).astype(np.uint8)
 
-    # Try both inpainting methods and use the better one
-    # TELEA: Fast diffusion-based, good for textures
-    inpainted_telea = cv2.inpaint(corner, mask_uint8, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+    if method == 'ns':
+        inpainted = cv2.inpaint(corner, mask_uint8, inpaintRadius=3, flags=cv2.INPAINT_NS)
+    else:  # telea
+        inpainted = cv2.inpaint(corner, mask_uint8, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
-    # NS: Navier-Stokes based, smoother results
-    inpainted_ns = cv2.inpaint(corner, mask_uint8, inpaintRadius=3, flags=cv2.INPAINT_NS)
-
-    # Use TELEA by default (generally better for our case)
-    result[y_start:, x_start:] = inpainted_telea
-
+    result[y_start:, x_start:] = inpainted
     return result
 
 
@@ -1436,32 +1479,87 @@ def remove_watermark_core(img_array, threshold=None):
     if np.sum(mask_corner) > 50:  # Only assess if watermark was detected
         quality = assess_removal_quality(cleaned_corner, mask_corner)
 
-    # HYBRID APPROACH: If quality is low OR smoothness is poor, try OpenCV inpainting as fallback
+    # MULTI-ALGORITHM APPROACH: Try multiple algorithms and select the best result
     watermark_template = get_watermark_template()
     if quality is not None and watermark_template is not None:
         template_mask = watermark_template > 0.01
 
-        # Quality threshold for triggering fallback
-        # Trigger if: overall < 95 OR smoothness < 90 (indicates artifacts/noise)
-        should_try_fallback = quality['overall'] < 95 or quality['smoothness'] < 90
+        # Analyze image characteristics to determine which algorithms to try
+        # Variables already computed: is_colored_border_case, num_true_black, num_true_white, num_colored
 
-        if should_try_fallback:
-            print(f"Quality low ({quality['overall']:.1f}), trying OpenCV inpainting fallback...")
+        # Calculate background variance within non-watermark area
+        corner_gray_full = np.mean(corner_cleaned, axis=2)
+        bg_variance = np.std(corner_gray_full[~template_mask])
 
-            # Try OpenCV inpainting
-            cleaned_opencv = opencv_inpaint_watermark(img_array, template_mask)
+        print(f"Image characteristics: colored_border={is_colored_border_case}, bg_variance={bg_variance:.1f}, true_black={num_true_black}, true_white={num_true_white}")
 
-            # Assess quality of OpenCV result
-            cleaned_opencv_corner = cleaned_opencv[height - corner_size:, width - corner_size:]
-            quality_opencv = assess_removal_quality(cleaned_opencv_corner, template_mask)
+        # Decide which algorithms to try based on characteristics
+        algorithms_to_try = []
 
-            # Use whichever result has better quality
-            if quality_opencv['overall'] > quality['overall']:
-                print(f"OpenCV inpainting better ({quality_opencv['overall']:.1f} vs {quality['overall']:.1f}), using it")
-                cleaned = cleaned_opencv
-                quality = quality_opencv
-            else:
-                print(f"Alpha-based removal better ({quality['overall']:.1f} vs {quality_opencv['overall']:.1f}), keeping it")
+        # CONSERVATIVE APPROACH: If alpha-based quality is very high (>= 98), don't try alternatives
+        # This prevents regressions on images where alpha-based already works excellently
+        if quality['overall'] >= 98:
+            # Alpha is excellent, skip alternatives entirely
+            algorithms_to_try = []
+            print(f"Strategy: Alpha quality excellent ({quality['overall']:.1f}) -> Using alpha-based only")
+        elif is_colored_border_case:
+            # Colored borders (apple ii, hillary's health): Try exemplar first, then OpenCV methods
+            algorithms_to_try = ['exemplar', 'opencv_telea', 'opencv_ns']
+            print("Strategy: Colored borders detected -> exemplar + OpenCV fallbacks")
+        elif bg_variance < 20 and quality['overall'] < 95:
+            # LOW variance (uniform area like hellfire's black border) + low quality: Use exemplar
+            # The watermark is in a uniform area and can be filled with nearby pixels
+            algorithms_to_try = ['exemplar', 'opencv_telea']
+            print(f"Strategy: Uniform background (variance={bg_variance:.1f}) + low quality -> exemplar + fallback")
+        elif bg_variance > 50 and quality['overall'] < 95:
+            # High variance/textured background AND low quality: OpenCV methods may help
+            algorithms_to_try = ['opencv_telea', 'opencv_ns']
+            print(f"Strategy: High variance background + low quality ({quality['overall']:.1f}) -> OpenCV methods")
+        elif quality['overall'] < 95 or quality['smoothness'] < 90:
+            # Low quality alpha result: Try OpenCV methods
+            algorithms_to_try = ['opencv_telea', 'exemplar']
+            print(f"Strategy: Low alpha quality ({quality['overall']:.1f}) -> OpenCV + exemplar")
+        elif quality['overall'] < 97:
+            # Moderate quality, try one fallback
+            algorithms_to_try = ['opencv_telea']
+            print(f"Strategy: Alpha quality moderate ({quality['overall']:.1f}) -> Light fallback")
+        else:
+            # Quality is good (97-98), skip alternatives
+            algorithms_to_try = []
+            print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
+
+        # Store all results: (algorithm_name, cleaned_image, quality_score)
+        results = [('alpha', cleaned, quality)]
+
+        # Try each selected algorithm
+        for algo in algorithms_to_try:
+            print(f"Trying {algo}...")
+            try:
+                if algo == 'exemplar':
+                    cleaned_algo = exemplar_inpaint_watermark(img_array, template_mask)
+                elif algo == 'opencv_telea':
+                    cleaned_algo = opencv_inpaint_watermark(img_array, template_mask, 'telea')
+                elif algo == 'opencv_ns':
+                    cleaned_algo = opencv_inpaint_watermark(img_array, template_mask, 'ns')
+                else:
+                    continue
+
+                # Assess quality of this algorithm's result
+                cleaned_algo_corner = cleaned_algo[height - corner_size:, width - corner_size:]
+                quality_algo = assess_removal_quality(cleaned_algo_corner, template_mask)
+
+                print(f"  {algo} quality: {quality_algo['overall']:.1f}")
+                results.append((algo, cleaned_algo, quality_algo))
+            except Exception as e:
+                print(f"  {algo} failed: {e}")
+
+        # Select the best result based on overall quality score
+        best_algo, cleaned, quality = max(results, key=lambda x: x[2]['overall'])
+
+        if best_algo != 'alpha':
+            print(f"Selected {best_algo} with quality {quality['overall']:.1f} (alpha was {results[0][2]['overall']:.1f})")
+        else:
+            print(f"Selected alpha-based with quality {quality['overall']:.1f}")
 
     return cleaned, quality, mask
 
