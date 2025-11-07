@@ -1516,20 +1516,50 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         corner_gray_full = np.mean(corner_cleaned, axis=2)
         bg_variance = np.std(corner_gray_full[~template_mask])
 
-        print(f"Image characteristics: colored_border={is_colored_border_case}, bg_variance={bg_variance:.1f}, true_black={num_true_black}, true_white={num_true_white}")
+        # IMPORTANT: Also check LOCAL variance of NEIGHBORS around watermark area
+        # This catches cases like hellfire where watermark is in uniform area (black border)
+        # but overall corner has high variance (textured image content)
+        # Check non-watermark pixels NEAR the watermark, not the watermark pixels themselves!
+        corner_original_check_gray = np.mean(corner_original_check, axis=2)
+
+        # Create a dilated mask to get neighbors (expand watermark by 5 pixels in all directions)
+        from scipy.ndimage import binary_dilation
+        dilated_mask = binary_dilation(template_mask, iterations=5)
+        neighbor_ring = dilated_mask & ~template_mask  # Pixels near watermark but not in it
+
+        # Get variance of neighbor pixels
+        if np.sum(neighbor_ring) > 0:
+            neighbor_variance = np.std(corner_original_check_gray[neighbor_ring])
+        else:
+            neighbor_variance = np.std(corner_original_check_gray[~template_mask])  # Fallback to all non-watermark
+
+        print(f"Image characteristics: colored_border={is_colored_border_case}, bg_variance={bg_variance:.1f}, neighbor_variance={neighbor_variance:.1f}, true_black={num_true_black}, true_white={num_true_white}")
 
         # Decide which algorithms to try based on characteristics
         algorithms_to_try = []
 
-        # PRIORITY 1: Colored border case - ALWAYS use exemplar regardless of quality score
-        # These images have uniform colored areas where exemplar achieves near-perfect results
+        # PRIORITY 1: Uniform local area - ALWAYS use exemplar regardless of quality score
+        # This includes:
+        # - Colored borders (no true black/white, high color variance)
+        # - Uniform neighbor area (low variance near watermark)
+        # - Uniform solid borders (lots of true black/white pixels AND low neighbor variance)
+        #   Like hellfire's black border (7728 black, variance=28.8)
+        #   NOT like earl's cove (6652 black, variance=82.1 - complex texture)
         # Must check BEFORE quality threshold to avoid skipping
-        if is_colored_border_case:
-            # Colored borders (apple ii, hillary's health): Use ONLY exemplar
-            # These images have uniform colored areas where watermark should be replaced with neighbors
-            # OpenCV methods score higher on quality but produce worse actual results (blurring)
+        has_solid_border = (num_true_black > 5000 or num_true_white > 5000)
+        is_uniform_solid_border = has_solid_border and neighbor_variance < 50
+
+        if is_colored_border_case or neighbor_variance < 10 or is_uniform_solid_border:
+            # Watermark is in a uniform/solid area - exemplar works best
+            # Exemplar achieves near-perfect results by copying nearby pixels
+            # Alpha-based blurring damages uniform areas
             algorithms_to_try = ['exemplar']
-            print("Strategy: Colored borders detected -> exemplar only (uniform area replacement)")
+            if is_colored_border_case:
+                print("Strategy: Colored borders detected -> exemplar only")
+            elif is_uniform_solid_border:
+                print(f"Strategy: Uniform solid border ({num_true_black} black, {num_true_white} white, variance={neighbor_variance:.1f}) -> exemplar only")
+            else:
+                print(f"Strategy: Uniform neighbor area (variance={neighbor_variance:.1f}) -> exemplar only")
         # PRIORITY 2: High quality alpha - don't try alternatives to prevent regression
         elif quality['overall'] >= 92:
             # Alpha is good, skip alternatives to prevent regression
@@ -1559,10 +1589,10 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
 
         # Store all results: (algorithm_name, cleaned_image, quality_score)
-        # IMPORTANT: For colored_border_case, don't include alpha in comparison!
-        # Exemplar is always better for uniform colored areas, but quality metrics favor alpha
-        if is_colored_border_case:
-            results = []  # Start with empty list, only add algorithms we try
+        # IMPORTANT: For uniform/solid areas, don't include alpha!
+        # Exemplar is always better for uniform areas, but quality metrics favor alpha
+        if is_colored_border_case or neighbor_variance < 10 or is_uniform_solid_border:
+            results = []  # Start with empty list, only add algorithms we try (exemplar)
         else:
             results = [('alpha', cleaned, quality)]  # Include alpha as baseline
 
