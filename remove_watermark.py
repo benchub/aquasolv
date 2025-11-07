@@ -1680,9 +1680,10 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             algorithms_to_try = ['segmented', 'opencv_telea', 'opencv_ns']
             print(f"Strategy: High variance background + low quality ({quality['overall']:.1f}) -> Segmented + OpenCV methods")
         elif quality['overall'] < 95 or quality['smoothness'] < 90:
-            # Low quality alpha result: Try OpenCV methods
-            algorithms_to_try = ['opencv_telea', 'exemplar']
-            print(f"Strategy: Low alpha quality ({quality['overall']:.1f}) -> OpenCV + exemplar")
+            # Low quality alpha result: Try segmented + OpenCV methods
+            # Segmented can handle moderate variance cases that alpha struggles with
+            algorithms_to_try = ['segmented', 'opencv_telea', 'exemplar']
+            print(f"Strategy: Low alpha quality ({quality['overall']:.1f}) -> Segmented + OpenCV + exemplar")
         elif quality['overall'] < 97:
             # Moderate quality, try one fallback
             algorithms_to_try = ['opencv_telea']
@@ -1728,14 +1729,15 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         # Segmented algorithm often under-scores on quality metrics but performs well in practice
         results_sorted = sorted(results, key=lambda x: x[2]['overall'], reverse=True)
 
-        # Check if segmented is in top results and within 2 points of best
+        # Check if segmented is in top results and within 3 points of best
         best_quality = results_sorted[0][2]['overall']
         segmented_result = next((r for r in results if r[0] == 'segmented'), None)
 
-        if segmented_result and segmented_result[2]['overall'] >= best_quality - 2:
+        if segmented_result and segmented_result[2]['overall'] >= best_quality - 3:
             # Prefer segmented when it's close to best
+            # Widened to 3 points because segmented consistently under-scores but performs better
             best_algo, cleaned, quality = segmented_result
-            print(f"Selected {best_algo} with quality {quality['overall']:.1f} (within 2 points of best {best_quality:.1f})")
+            print(f"Selected {best_algo} with quality {quality['overall']:.1f} (within 3 points of best {best_quality:.1f})")
         else:
             # Use best by quality score
             best_algo, cleaned, quality = results_sorted[0]
