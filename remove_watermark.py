@@ -1503,13 +1503,16 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         # Decide which algorithms to try based on characteristics
         algorithms_to_try = []
 
-        # VERY CONSERVATIVE APPROACH: If alpha-based quality is high (>= 96), don't try alternatives
+        # BALANCED APPROACH: If alpha-based quality is good (>= 92), don't try alternatives
         # This prevents regressions on images where alpha-based already works well
-        # Raised from 98 to 96 to prevent more regressions while still allowing improvements
-        if quality['overall'] >= 96:
-            # Alpha is excellent, skip alternatives entirely
+        # Analysis shows:
+        # - Most regressed images have alpha quality 90-92 where OpenCV scores higher but performs worse
+        # - Many passing images have quality 86-91 but alpha still works best
+        # Using threshold of 92 as a balance point
+        if quality['overall'] >= 92:
+            # Alpha is good, skip alternatives to prevent regression
             algorithms_to_try = []
-            print(f"Strategy: Alpha quality excellent ({quality['overall']:.1f}) -> Using alpha-based only")
+            print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
         elif is_colored_border_case:
             # Colored borders (apple ii, hillary's health): Try exemplar first, then OpenCV methods
             algorithms_to_try = ['exemplar', 'opencv_telea', 'opencv_ns']
