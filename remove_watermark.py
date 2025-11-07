@@ -17,6 +17,7 @@ from PIL import Image
 import argparse
 from scipy import ndimage
 import os
+import cv2
 
 
 def assess_removal_quality(cleaned_corner, mask_corner):
@@ -116,6 +117,43 @@ def assess_removal_quality(cleaned_corner, mask_corner):
         'consistency': consistency_score,
         'edge_preservation': edge_score
     }
+
+
+def opencv_inpaint_watermark(img_array, template_mask):
+    """
+    Use OpenCV's inpainting algorithms to remove watermark.
+    This is a fallback for cases where alpha-based removal fails.
+
+    Args:
+        img_array: Original image array
+        template_mask: Boolean mask of watermark pixels (from template)
+
+    Returns:
+        Inpainted image array
+    """
+    height, width = img_array.shape[:2]
+    corner_size = 100
+    y_start = height - corner_size
+    x_start = width - corner_size
+
+    # Create a copy to inpaint
+    result = img_array.copy()
+    corner = result[y_start:, x_start:].copy()
+
+    # Convert mask to uint8 format (required by OpenCV)
+    mask_uint8 = (template_mask * 255).astype(np.uint8)
+
+    # Try both inpainting methods and use the better one
+    # TELEA: Fast diffusion-based, good for textures
+    inpainted_telea = cv2.inpaint(corner, mask_uint8, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+    # NS: Navier-Stokes based, smoother results
+    inpainted_ns = cv2.inpaint(corner, mask_uint8, inpaintRadius=3, flags=cv2.INPAINT_NS)
+
+    # Use TELEA by default (generally better for our case)
+    result[y_start:, x_start:] = inpainted_telea
+
+    return result
 
 
 def analyze_watermark_features(img_array, mask):
@@ -1397,6 +1435,33 @@ def remove_watermark_core(img_array, threshold=None):
     quality = None
     if np.sum(mask_corner) > 50:  # Only assess if watermark was detected
         quality = assess_removal_quality(cleaned_corner, mask_corner)
+
+    # HYBRID APPROACH: If quality is low OR smoothness is poor, try OpenCV inpainting as fallback
+    watermark_template = get_watermark_template()
+    if quality is not None and watermark_template is not None:
+        template_mask = watermark_template > 0.01
+
+        # Quality threshold for triggering fallback
+        # Trigger if: overall < 95 OR smoothness < 90 (indicates artifacts/noise)
+        should_try_fallback = quality['overall'] < 95 or quality['smoothness'] < 90
+
+        if should_try_fallback:
+            print(f"Quality low ({quality['overall']:.1f}), trying OpenCV inpainting fallback...")
+
+            # Try OpenCV inpainting
+            cleaned_opencv = opencv_inpaint_watermark(img_array, template_mask)
+
+            # Assess quality of OpenCV result
+            cleaned_opencv_corner = cleaned_opencv[height - corner_size:, width - corner_size:]
+            quality_opencv = assess_removal_quality(cleaned_opencv_corner, template_mask)
+
+            # Use whichever result has better quality
+            if quality_opencv['overall'] > quality['overall']:
+                print(f"OpenCV inpainting better ({quality_opencv['overall']:.1f} vs {quality['overall']:.1f}), using it")
+                cleaned = cleaned_opencv
+                quality = quality_opencv
+            else:
+                print(f"Alpha-based removal better ({quality['overall']:.1f} vs {quality_opencv['overall']:.1f}), keeping it")
 
     return cleaned, quality, mask
 
