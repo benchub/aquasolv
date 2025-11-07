@@ -1127,6 +1127,7 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
     x_start = width - corner_size
     corner_cleaned = cleaned[y_start:, x_start:]
     corner_mask = mask[y_start:, x_start:]
+    corner_original = img_array[y_start:, x_start:]  # IMPORTANT: Get original corner for border detection
 
     if np.sum(corner_mask) > 0:
         corner_gray = np.mean(corner_cleaned, axis=2)
@@ -1135,12 +1136,15 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         # Analysis shows border correction helps with TRUE black/white borders but hurts
         # with colored borders (blue, etc.) or when watermark removal already succeeded.
 
-        # Check for TRUE black pixels (< 30, not just dark)
-        true_black = corner_gray < 30
+        # IMPORTANT: Check borders on ORIGINAL image, not cleaned result!
+        corner_original_gray = np.mean(corner_original, axis=2)
+
+        # Check for TRUE black pixels (< 30, not just dark) in ORIGINAL
+        true_black = corner_original_gray < 30
         num_true_black = np.sum(true_black)
 
-        # Check for TRUE white pixels (> 230)
-        true_white = corner_gray > 230
+        # Check for TRUE white pixels (> 230) in ORIGINAL
+        true_white = corner_original_gray > 230
         num_true_white = np.sum(true_white)
 
         # Conservative thresholds based on analysis:
@@ -1150,7 +1154,8 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
 
         # Check if this is a colored border case (like apple ii, hillary's health)
         # These have NO true black/white but lots of colored variance
-        color_variance = np.std(corner_cleaned, axis=2)
+        # IMPORTANT: Check on ORIGINAL image, not cleaned result!
+        color_variance = np.std(corner_original, axis=2)
         num_colored = np.sum(color_variance > 20)
 
         # Skip border correction ONLY if we have colored borders WITHOUT true black/white
@@ -1492,7 +1497,20 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         template_mask = watermark_template > 0.01
 
         # Analyze image characteristics to determine which algorithms to try
-        # Variables already computed: is_colored_border_case, num_true_black, num_true_white, num_colored
+        # IMPORTANT: Re-check colored border status here since variables may be out of scope
+        corner_original_check = img_array[y_start:, x_start:]
+        corner_original_gray_check = np.mean(corner_original_check, axis=2)
+
+        true_black_check = corner_original_gray_check < 30
+        num_true_black = np.sum(true_black_check)
+
+        true_white_check = corner_original_gray_check > 230
+        num_true_white = np.sum(true_white_check)
+
+        color_variance_check = np.std(corner_original_check, axis=2)
+        num_colored = np.sum(color_variance_check > 20)
+
+        is_colored_border_case = (num_true_black == 0 and num_true_white == 0 and num_colored > 1000)
 
         # Calculate background variance within non-watermark area
         corner_gray_full = np.mean(corner_cleaned, axis=2)
@@ -1514,9 +1532,11 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             algorithms_to_try = []
             print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
         elif is_colored_border_case:
-            # Colored borders (apple ii, hillary's health): Try exemplar first, then OpenCV methods
-            algorithms_to_try = ['exemplar', 'opencv_telea', 'opencv_ns']
-            print("Strategy: Colored borders detected -> exemplar + OpenCV fallbacks")
+            # Colored borders (apple ii, hillary's health): Use ONLY exemplar
+            # These images have uniform colored areas where watermark should be replaced with neighbors
+            # OpenCV methods score higher on quality but produce worse actual results (blurring)
+            algorithms_to_try = ['exemplar']
+            print("Strategy: Colored borders detected -> exemplar only (uniform area replacement)")
         elif bg_variance < 20 and quality['overall'] < 95:
             # LOW variance (uniform area like hellfire's black border) + low quality: Use exemplar
             # The watermark is in a uniform area and can be filled with nearby pixels
