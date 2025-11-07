@@ -1044,41 +1044,106 @@ def remove_watermark_core(img_array, threshold=None):
     if np.sum(corner_mask) > 0:
         corner_gray = np.mean(corner_cleaned, axis=2)
 
-        # Detect strong border FRAMES (not just dark backgrounds)
-        # A border frame has very dark/bright pixels concentrated at edges AND
-        # extending into the interior (forming lines/rectangles)
-        very_dark = corner_gray < 15
-        very_bright = corner_gray > 240
+        # SMART BORDER DETECTION: Only apply border correction when it will actually help
+        # Analysis shows border correction helps with TRUE black/white borders but hurts
+        # with colored borders (blue, etc.) or when watermark removal already succeeded.
 
-        # Trigger for black borders (< 15) or white borders (> 240)
-        # Threshold of 400 pixels balances catching thinner borders without over-correcting
-        has_border_frames = np.sum(very_dark) > 400 or np.sum(very_bright) > 400
+        # Check for TRUE black pixels (< 30, not just dark)
+        true_black = corner_gray < 30
+        num_true_black = np.sum(true_black)
 
-        # Don't apply border correction if the watermark itself was VERY bright
-        # AND the result still has very bright pixels (indicating failed removal)
-        # Otherwise, border correction is safe and helpful
+        # Check for TRUE white pixels (> 230)
+        true_white = corner_gray > 230
+        num_true_white = np.sum(true_white)
+
+        # Conservative thresholds based on analysis:
+        # - Images that benefit have 200+ true black OR white pixels
+        # - Images that regress have 0 true black AND 0 true white pixels
+        has_true_borders = num_true_black > 200 or num_true_white > 200
+
+        # Check if this is a colored border case (like apple ii, hillary's health)
+        # These have NO true black/white but lots of colored variance
+        color_variance = np.std(corner_cleaned, axis=2)
+        num_colored = np.sum(color_variance > 20)
+
+        # Skip border correction ONLY if we have colored borders WITHOUT true black/white
+        # (This catches apple ii, hillary's health while allowing others through)
+        is_colored_border_case = (num_true_black == 0 and num_true_white == 0 and num_colored > 1000)
+
+        # Apply border correction if we have true borders OR if we have some borders but not colored
+        has_border_frames = has_true_borders and not is_colored_border_case
+
+        # Additional safety: Skip if watermark removal already produced good results
         corner_original = img_array[y_start:, x_start:]
         watermark_pixels_original = corner_original[corner_mask]
-        if len(watermark_pixels_original) > 0:
+        if len(watermark_pixels_original) > 0 and has_border_frames:
             watermark_brightness = np.mean(watermark_pixels_original)
-            # Only skip if watermark was very bright AND result still has bright artifacts
+            # Skip if watermark was very bright AND result still has bright artifacts
             result_has_bright_artifacts = np.sum(corner_gray[corner_mask] > 220) > 100
             if watermark_brightness > 230 and result_has_bright_artifacts:
-                # Watermark was very bright and removal failed, don't apply border correction
                 print(f"Skipping border correction (watermark brightness={watermark_brightness:.1f}, bright artifacts remain)")
                 has_border_frames = False
+
+        # Define very_dark and very_bright for use in border correction logic
+        very_dark = corner_gray < 15
+        very_bright = corner_gray > 240
 
         if has_border_frames:
             print(f"Border correction enabled (very_dark={np.sum(very_dark)}, very_bright={np.sum(very_bright)})")
 
-            # STRATEGY 1: Check if we can use template-based watermark region
-            # This tells us exactly where the watermark is (not where we detected it)
+            # STRATEGY 1: Template-based shape-aware replacement (DISABLED - causes regressions)
+            # This approach replaces pixels but often makes things worse by overriding
+            # successful watermark removal. Keep disabled for now.
             watermark_template = get_watermark_template()
-            if watermark_template is not None:
+            if False and watermark_template is not None:
                 template_mask = watermark_template > 0.01
-                # Use template to know exact watermark region
-                # Watermark is centered at (43.5, 43.5), size 48x48
-                print(f"Using watermark template for precise border correction")
+                print(f"Using watermark template for shape-aware replacement")
+
+                # For each pixel in the watermark shape, check if it needs replacement
+                # Only replace pixels that look wrong (different from expected border color)
+                pixels_replaced = 0
+                for y in range(corner_size):
+                    for x in range(corner_size):
+                        if template_mask[y, x]:
+                            current_pixel = corner_cleaned[y, x]
+
+                            # Find nearest non-watermark pixels to determine expected color
+                            row_sample = None
+                            for dx in range(1, 20):  # Search further for better samples
+                                if x - dx >= 0 and not template_mask[y, x - dx]:
+                                    row_sample = corner_cleaned[y, x - dx]
+                                    break
+                                if x + dx < corner_size and not template_mask[y, x + dx]:
+                                    row_sample = corner_cleaned[y, x + dx]
+                                    break
+
+                            col_sample = None
+                            for dy in range(1, 20):
+                                if y - dy >= 0 and not template_mask[y - dy, x]:
+                                    col_sample = corner_cleaned[y - dy, x]
+                                    break
+                                if y + dy < corner_size and not template_mask[y + dy, x]:
+                                    col_sample = corner_cleaned[y + dy, x]
+                                    break
+
+                            # Determine expected color (prefer row for horizontal borders)
+                            expected_color = row_sample if row_sample is not None else col_sample
+
+                            if expected_color is not None:
+                                # Check if current pixel is significantly different from expected
+                                color_diff = np.abs(current_pixel.astype(float) - expected_color).max()
+
+                                # Only replace if pixel is significantly wrong (diff > 30)
+                                if color_diff > 30:
+                                    corner_cleaned[y, x] = expected_color
+                                    pixels_replaced += 1
+
+                if pixels_replaced > 0:
+                    print(f"Replaced {pixels_replaced} watermark pixels with nearby border colors")
+                    # Update the main cleaned array
+                    cleaned[y_start:, x_start:] = corner_cleaned
+                    has_border_frames = False  # Skip other correction strategies
+
             else:
                 template_mask = None
 
@@ -1254,21 +1319,51 @@ def remove_watermark_core(img_array, threshold=None):
                             all_very_bright = row_very_bright + col_very_bright
                             all_colors = row_colors + col_colors
 
-                            # If this is a gray pixel (100-180) and we found black borders nearby, snap to black
+                            # STRATEGY: Don't "fix" pixels that are already similar to a border color
+                            # Check if current pixel is already close to any border color we found
+                            current_color = corner_cleaned[y, x]
+                            is_already_border_like = False
+
+                            # First check: is pixel already close to current_val (50-100 range = dark borders)?
+                            # If pixel is dark (< 100) and consistent across channels, it's likely already correct
+                            if current_val < 100:
+                                color_std = np.std(current_color)
+                                # If it's a consistent dark color (low variance), likely a correct border
+                                if color_std < 30:
+                                    is_already_border_like = True
+
+                            # Second check: is pixel close to any sampled border color?
+                            if not is_already_border_like and len(all_colors) > 0:
+                                for border_sample in all_colors:
+                                    color_diff = np.abs(current_color.astype(float) - border_sample).max()
+                                    if color_diff < 30:  # Already very close to a border color
+                                        is_already_border_like = True
+                                        break
+
+                            # Skip correction if pixel is already at an appropriate border color
+                            if is_already_border_like:
+                                continue
+
+                            # STRATEGY: Only snap to extremes (0 or 255) if we found VERY dark/bright pixels
+                            # For moderately dark borders (like dark blue), use the actual border color
+
+                            # If this is a gray pixel (100-180) and we found TRUE BLACK borders nearby, snap to black
                             if 100 <= current_val <= 180 and len(all_very_dark) > 0:
-                                corner_cleaned[y, x] = 0  # Snap to black
-                            # If this is a gray-ish pixel and we found white borders nearby, snap to white
+                                # We found very dark pixels (<50), so snap to black
+                                corner_cleaned[y, x] = 0
+                            # If this is a gray-ish pixel and we found TRUE WHITE borders nearby, snap to white
                             elif 180 < current_val < 230 and len(all_very_bright) > 0:
-                                corner_cleaned[y, x] = 255  # Snap to white
-                            # If gray (100-180) and we have ANY dark borders nearby (< 100), snap to black
+                                # We found very bright pixels (>230), so snap to white
+                                corner_cleaned[y, x] = 255
+                            # If gray (100-180) and we have dark borders nearby, use border color (don't force to black)
                             elif 100 <= current_val <= 180 and len(all_colors) > 0:
                                 border_vals = [np.mean(c) for c in all_colors]
                                 avg_border = np.mean(border_vals)
-                                # If nearby borders are dark (< 100), this is likely a black border
-                                if avg_border < 100:
-                                    corner_cleaned[y, x] = 0  # Snap to black
-                                # Only apply border color if it would make pixel darker (fixing over-brightening)
-                                # Don't brighten pixels - that would be wrong
+                                # If nearby borders are VERY dark (<50 avg), snap to black
+                                if avg_border < 50:
+                                    corner_cleaned[y, x] = 0
+                                # Otherwise, use the actual border color (might be dark blue, not black)
+                                # Only apply if it makes pixel darker (fixing over-brightening)
                                 elif avg_border < current_val - 10:
                                     border_color = np.median(all_colors, axis=0)
                                     corner_cleaned[y, x] = border_color
@@ -1276,10 +1371,16 @@ def remove_watermark_core(img_array, threshold=None):
                             elif len(all_colors) > 0:
                                 border_vals = [np.mean(c) for c in all_colors]
                                 avg_border = np.mean(border_vals)
-                                # Only snap if border is significantly darker OR similar
-                                # Don't brighten pixels (that indicates we're snapping to wrong border)
-                                if avg_border < current_val + 20:
-                                    border_color = np.median(all_colors, axis=0)
+                                border_color = np.median(all_colors, axis=0)
+
+                                # Check if pixel is already close to border color - don't "fix" what's not broken
+                                current_color = corner_cleaned[y, x]
+                                color_diff = np.abs(current_color.astype(float) - border_color).max()
+
+                                # Only apply correction if:
+                                # 1. Border is darker (fixing over-brightening from watermark)
+                                # 2. Pixel is significantly different from border (needs correction)
+                                if avg_border < current_val + 20 and color_diff > 30:
                                     corner_cleaned[y, x] = border_color
 
                 # Update the main cleaned array
