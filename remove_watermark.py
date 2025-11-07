@@ -850,10 +850,16 @@ def estimate_background(img_array, mask):
     return cleaned
 
 
-def remove_watermark_core(img_array, threshold=None):
+def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True):
     """
     Core watermark removal logic that operates on an image array.
     Returns (cleaned_array, quality_dict, mask).
+
+    Args:
+        img_array: Input image as numpy array
+        threshold: Watermark detection threshold (None for auto)
+        enable_multi_algorithm: If True, try multiple algorithms and pick best.
+                                If False, use only alpha-based (for threshold comparison)
 
     This function doesn't save the result, allowing for iterative testing
     with different thresholds.
@@ -1480,8 +1486,9 @@ def remove_watermark_core(img_array, threshold=None):
         quality = assess_removal_quality(cleaned_corner, mask_corner)
 
     # MULTI-ALGORITHM APPROACH: Try multiple algorithms and select the best result
+    # Only run if enable_multi_algorithm is True (disabled during threshold comparison)
     watermark_template = get_watermark_template()
-    if quality is not None and watermark_template is not None:
+    if enable_multi_algorithm and quality is not None and watermark_template is not None:
         template_mask = watermark_template > 0.01
 
         # Analyze image characteristics to determine which algorithms to try
@@ -1496,9 +1503,10 @@ def remove_watermark_core(img_array, threshold=None):
         # Decide which algorithms to try based on characteristics
         algorithms_to_try = []
 
-        # CONSERVATIVE APPROACH: If alpha-based quality is very high (>= 98), don't try alternatives
-        # This prevents regressions on images where alpha-based already works excellently
-        if quality['overall'] >= 98:
+        # VERY CONSERVATIVE APPROACH: If alpha-based quality is high (>= 96), don't try alternatives
+        # This prevents regressions on images where alpha-based already works well
+        # Raised from 98 to 96 to prevent more regressions while still allowing improvements
+        if quality['overall'] >= 96:
             # Alpha is excellent, skip alternatives entirely
             algorithms_to_try = []
             print(f"Strategy: Alpha quality excellent ({quality['overall']:.1f}) -> Using alpha-based only")
@@ -1605,20 +1613,19 @@ def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_
     if try_multiple_thresholds and threshold is None:
         print("\nTrying multiple thresholds to find best result...")
 
-        # Try different thresholds
+        # Try different thresholds WITH ALPHA-BASED ONLY (no multi-algorithm yet)
+        # This ensures we're comparing apples-to-apples across thresholds
         test_thresholds = [None, 3, 5, 7, 10, 15]
         results = []
 
         for test_threshold in test_thresholds:
             print(f"\n--- Testing threshold={test_threshold} ---")
-            cleaned, quality, mask = remove_watermark_core(img_array, test_threshold)
+            cleaned, quality, mask = remove_watermark_core(img_array, test_threshold, enable_multi_algorithm=False)
 
             if cleaned is not None and quality is not None:
                 results.append({
                     'threshold': test_threshold,
-                    'cleaned': cleaned,
                     'quality': quality,
-                    'mask': mask
                 })
                 print(f"Quality: overall={quality['overall']:.1f}, smooth={quality['smoothness']:.1f}, consistent={quality['consistency']:.1f}, edges={quality['edge_preservation']:.1f}")
 
@@ -1626,18 +1633,21 @@ def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_
             print("No watermark detected with any threshold!")
             return
 
-        # Pick the best result based on overall quality
+        # Pick the best threshold based on alpha-based quality
         best_result = max(results, key=lambda r: r['quality']['overall'])
-        cleaned = best_result['cleaned']
         best_threshold = best_result['threshold']
         best_quality = best_result['quality']
 
-        print(f"\n=== Selected threshold={best_threshold} with quality={best_quality['overall']:.1f} ===")
+        print(f"\n=== Selected threshold={best_threshold} with alpha quality={best_quality['overall']:.1f} ===")
+
+        # Now run the BEST threshold with multi-algorithm enabled
+        print(f"Running multi-algorithm selection on best threshold...")
+        cleaned, quality, mask = remove_watermark_core(img_array, best_threshold, enable_multi_algorithm=True)
 
     else:
-        # Single threshold mode
+        # Single threshold mode - use multi-algorithm
         print("\nProcessing with single threshold...")
-        cleaned, quality, mask = remove_watermark_core(img_array, threshold)
+        cleaned, quality, mask = remove_watermark_core(img_array, threshold, enable_multi_algorithm=True)
 
         if cleaned is None:
             print("No watermark detected!")
