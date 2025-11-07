@@ -1724,13 +1724,25 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             except Exception as e:
                 print(f"  {algo} failed: {e}")
 
-        # Select the best result based on overall quality score
-        best_algo, cleaned, quality = max(results, key=lambda x: x[2]['overall'])
+        # Select the best result with preference for segmented when quality is close
+        # Segmented algorithm often under-scores on quality metrics but performs well in practice
+        results_sorted = sorted(results, key=lambda x: x[2]['overall'], reverse=True)
 
-        if best_algo != 'alpha':
-            print(f"Selected {best_algo} with quality {quality['overall']:.1f} (alpha was {results[0][2]['overall']:.1f})")
+        # Check if segmented is in top results and within 2 points of best
+        best_quality = results_sorted[0][2]['overall']
+        segmented_result = next((r for r in results if r[0] == 'segmented'), None)
+
+        if segmented_result and segmented_result[2]['overall'] >= best_quality - 2:
+            # Prefer segmented when it's close to best
+            best_algo, cleaned, quality = segmented_result
+            print(f"Selected {best_algo} with quality {quality['overall']:.1f} (within 2 points of best {best_quality:.1f})")
         else:
-            print(f"Selected alpha-based with quality {quality['overall']:.1f}")
+            # Use best by quality score
+            best_algo, cleaned, quality = results_sorted[0]
+            if best_algo != 'alpha':
+                print(f"Selected {best_algo} with quality {quality['overall']:.1f} (alpha was {results[0][2]['overall']:.1f})")
+            else:
+                print(f"Selected alpha-based with quality {quality['overall']:.1f}")
 
     return cleaned, quality, mask
 
