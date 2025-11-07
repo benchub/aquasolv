@@ -769,53 +769,23 @@ def estimate_background(img_array, mask):
     return cleaned
 
 
-def remove_watermark(input_path, output_path=None, threshold=None):
+def remove_watermark_core(img_array, threshold=None):
     """
-    Remove the Gemini watermark from an image by inpainting from surrounding pixels.
-    Automatically detects L-pattern cases and uses template-based algorithm for better results.
+    Core watermark removal logic that operates on an image array.
+    Returns (cleaned_array, quality_dict, mask).
+
+    This function doesn't save the result, allowing for iterative testing
+    with different thresholds.
     """
-    # Load image
-    img = Image.open(input_path)
-    img_array = np.array(img)
+    height, width = img_array.shape[:2]
 
-    print(f"Processing {input_path}...")
-    print(f"Image size: {img_array.shape}")
-
-    # Check for L-pattern (borders through sparkle peaks)
-    has_L_pattern = detect_L_pattern(img_array)
-
-    if has_L_pattern:
-        # Use template-based algorithm for L-pattern cases (97%+ accuracy)
-        cleaned = remove_watermark_template_based(img_array)
-
-        if cleaned is not None:
-            # Template-based removal succeeded
-            cleaned = np.clip(cleaned, 0, 255).astype(np.uint8)
-
-            # Save result
-            if output_path is None:
-                output_path = input_path.rsplit('.', 1)[0] + '_cleaned.png'
-
-            Image.fromarray(cleaned).save(output_path)
-            print(f"Saved to: {output_path}")
-            return
-
-        # If template-based failed, fall through to standard algorithm
-        print("Template-based removal not available, using standard algorithm")
-
-    # Standard algorithm for non-L-pattern cases
     # Detect watermark
-    print("Detecting watermark...")
     mask, is_white_on_dark_icon = detect_watermark_mask(img_array, threshold)
 
     watermark_pixels = np.sum(mask)
-    print(f"Watermark region: {watermark_pixels} pixels")
 
     if watermark_pixels == 0:
-        print("No watermark detected!")
-        return
-
-    print("Removing watermark...")
+        return None, None, mask
 
     # Analyze watermark features to choose strategy
     features = analyze_watermark_features(img_array, mask)
@@ -1187,9 +1157,94 @@ def remove_watermark(input_path, output_path=None, threshold=None):
     cleaned_corner = cleaned[height - corner_size:, width - corner_size:]
     mask_corner = mask[height - corner_size:, width - corner_size:]
 
+    quality = None
     if np.sum(mask_corner) > 50:  # Only assess if watermark was detected
         quality = assess_removal_quality(cleaned_corner, mask_corner)
-        print(f"Quality: overall={quality['overall']:.1f}, smooth={quality['smoothness']:.1f}, consistent={quality['consistency']:.1f}, edges={quality['edge_preservation']:.1f}")
+
+    return cleaned, quality, mask
+
+
+def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_thresholds=True):
+    """
+    Remove the Gemini watermark from an image by inpainting from surrounding pixels.
+    Automatically detects L-pattern cases and uses template-based algorithm for better results.
+
+    If try_multiple_thresholds is True, will try several thresholds and pick the best result
+    based on quality scoring.
+    """
+    # Load image
+    img = Image.open(input_path)
+    img_array = np.array(img)
+
+    print(f"Processing {input_path}...")
+    print(f"Image size: {img_array.shape}")
+
+    # Check for L-pattern (borders through sparkle peaks)
+    has_L_pattern = detect_L_pattern(img_array)
+
+    if has_L_pattern:
+        # Use template-based algorithm for L-pattern cases (97%+ accuracy)
+        cleaned = remove_watermark_template_based(img_array)
+
+        if cleaned is not None:
+            # Template-based removal succeeded
+            cleaned = np.clip(cleaned, 0, 255).astype(np.uint8)
+
+            # Save result
+            if output_path is None:
+                output_path = input_path.rsplit('.', 1)[0] + '_cleaned.png'
+
+            Image.fromarray(cleaned).save(output_path)
+            print(f"Saved to: {output_path}")
+            return
+
+        # If template-based failed, fall through to standard algorithm
+        print("Template-based removal not available, using standard algorithm")
+
+    # Standard algorithm - try multiple thresholds if requested
+    if try_multiple_thresholds and threshold is None:
+        print("\nTrying multiple thresholds to find best result...")
+
+        # Try different thresholds
+        test_thresholds = [None, 3, 5, 7, 10, 15]
+        results = []
+
+        for test_threshold in test_thresholds:
+            print(f"\n--- Testing threshold={test_threshold} ---")
+            cleaned, quality, mask = remove_watermark_core(img_array, test_threshold)
+
+            if cleaned is not None and quality is not None:
+                results.append({
+                    'threshold': test_threshold,
+                    'cleaned': cleaned,
+                    'quality': quality,
+                    'mask': mask
+                })
+                print(f"Quality: overall={quality['overall']:.1f}, smooth={quality['smoothness']:.1f}, consistent={quality['consistency']:.1f}, edges={quality['edge_preservation']:.1f}")
+
+        if len(results) == 0:
+            print("No watermark detected with any threshold!")
+            return
+
+        # Pick the best result based on overall quality
+        best_result = max(results, key=lambda r: r['quality']['overall'])
+        cleaned = best_result['cleaned']
+        best_threshold = best_result['threshold']
+        best_quality = best_result['quality']
+
+        print(f"\n=== Selected threshold={best_threshold} with quality={best_quality['overall']:.1f} ===")
+
+    else:
+        # Single threshold mode
+        print("\nProcessing with single threshold...")
+        cleaned, quality, mask = remove_watermark_core(img_array, threshold)
+
+        if cleaned is None:
+            print("No watermark detected!")
+            return
+
+        if quality is not None:
+            print(f"Quality: overall={quality['overall']:.1f}, smooth={quality['smoothness']:.1f}, consistent={quality['consistency']:.1f}, edges={quality['edge_preservation']:.1f}")
 
     # Save result
     if output_path is None:
@@ -1205,11 +1260,14 @@ def main():
     parser.add_argument('-o', '--output', help='Output image path (default: input_cleaned.png)')
     parser.add_argument('-t', '--threshold', type=int, default=None,
                         help='Brightness threshold for watermark detection (default: auto)')
+    parser.add_argument('--no-multi-threshold', action='store_true',
+                        help='Disable trying multiple thresholds (faster but may be lower quality)')
 
     args = parser.parse_args()
 
     try:
-        remove_watermark(args.input, args.output, args.threshold)
+        remove_watermark(args.input, args.output, args.threshold,
+                        try_multiple_thresholds=not args.no_multi_threshold)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
