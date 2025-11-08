@@ -221,7 +221,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
     segments = np.zeros((100, 100), dtype=int) - 1
     segment_id = 0
 
-    from scipy.ndimage import label as connected_components_label
+    from scipy.ndimage import label as connected_components_label, binary_erosion
 
     for color in unique_colors:
         # Find pixels of this color in the core region
@@ -272,6 +272,9 @@ def segmented_inpaint_watermark(img_array, template_mask):
     watermark_boundary_coords = np.argwhere(watermark_boundary)
     print(f"  Watermark boundary has {len(watermark_boundary_coords)} pixels (dilation={iterations}, brightness={boundary_brightness:.0f})")
 
+    # Find where the watermark core ends (not the dilated boundary, but the actual watermark pixels)
+    watermark_core_edge = core_mask & ~binary_dilation(~core_mask, iterations=1)
+
     for segment_id in unique_segments:
         # Get pixels in this segment
         segment_mask = (segments == segment_id)
@@ -282,28 +285,110 @@ def segmented_inpaint_watermark(img_array, template_mask):
         segment_coords = np.argwhere(segment_mask)
         print(f"  Processing segment {segment_id} with {len(segment_coords)} pixels")
 
-        # Find boundary pixels that are ADJACENT to this specific segment
-        # Dilate just this segment by 1 pixel to find its immediate neighbors
-        segment_dilated = binary_dilation(segment_mask, iterations=1)
+        # Find where THIS segment touches the outer edge of the watermark core
+        # Step 1: Find edge pixels of this segment (pixels at the boundary of the segment)
+        segment_edge = segment_mask & ~binary_erosion(segment_mask, iterations=1)
 
-        # Boundary for THIS segment = dilated segment pixels that are:
-        # 1. Outside the entire watermark (in watermark_boundary)
-        # 2. Adjacent to this segment (in segment_dilated)
-        segment_boundary_mask = segment_dilated & (watermark_boundary > 0)
+        # Step 2: Among segment edge pixels, find which ones are at the watermark's outer boundary
+        # A segment edge pixel is at the outer boundary if it's adjacent to non-watermark pixels
+        # (i.e., when dilated by 1, it reaches outside the core watermark)
+        segment_outer_touching = np.zeros_like(segment_mask, dtype=bool)
+        for y, x in np.argwhere(segment_edge):
+            # Check if this segment edge pixel is adjacent to the outer boundary
+            # by seeing if dilating from this pixel reaches outside the watermark
+            for dy, dx in [(-1,0), (1,0), (0,-1), (0,1)]:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < segment_mask.shape[0] and 0 <= nx < segment_mask.shape[1]:
+                    if not core_mask[ny, nx]:
+                        # This pixel is adjacent to non-watermark area
+                        segment_outer_touching[y, x] = True
+                        break
 
-        if not np.any(segment_boundary_mask):
-            # No adjacent boundary found, fall back to nearby boundary pixels
-            print(f"    Warning: No adjacent boundary for segment {segment_id}, using nearby pixels")
-            segment_center = np.mean(segment_coords, axis=0)
-            distances = np.sqrt(np.sum((watermark_boundary_coords - segment_center)**2, axis=1))
-            num_closest = max(10, len(distances) // 5)
-            closest_indices = np.argsort(distances)[:num_closest]
-            fill_color = np.median(watermark_boundary_colors[closest_indices], axis=0)
+        if not np.any(segment_outer_touching):
+            # Interior segment with no direct contact to outer boundary
+            # Need to trace outward to find where segment area reaches the edge
+            # Dilate the segment until it touches the watermark boundary
+            print(f"    Segment {segment_id} is interior, finding nearest boundary contact")
+            segment_dilated = segment_mask.copy()
+            for dilation_iter in range(1, 20):
+                segment_dilated = binary_dilation(segment_dilated, iterations=1)
+                # Find where dilated segment meets the outer watermark boundary
+                contact_points = segment_dilated & ~core_mask
+                if np.any(contact_points):
+                    # These are the points just outside watermark where segment reaches
+                    segment_boundary_colors = corner[contact_points]
+                    fill_color = np.median(segment_boundary_colors, axis=0)
+                    print(f"    Segment {segment_id} reaches boundary at {np.sum(contact_points)} points (dilation={dilation_iter}), fill color: RGB{tuple(fill_color.astype(int))}")
+                    break
+            else:
+                # Failed to reach boundary
+                print(f"    Warning: Segment {segment_id} could not reach boundary, using fallback")
+                segment_center = np.mean(segment_coords, axis=0)
+                distances = np.sqrt(np.sum((watermark_boundary_coords - segment_center)**2, axis=1))
+                num_closest = max(10, len(distances) // 5)
+                closest_indices = np.argsort(distances)[:num_closest]
+                fill_color = np.median(watermark_boundary_colors[closest_indices], axis=0)
         else:
-            # Get colors from boundary pixels adjacent to this segment
-            segment_boundary_colors = corner[segment_boundary_mask]
-            fill_color = np.median(segment_boundary_colors, axis=0)
-            print(f"    Segment {segment_id} has {np.sum(segment_boundary_mask)} adjacent boundary pixels, fill color: RGB{tuple(fill_color.astype(int))}")
+            # Segment touches outer boundary
+            # Group touching points by which edge they're on (top/bottom/left/right)
+            # and sample from the center of each edge group
+            touching_coords = np.argwhere(segment_outer_touching)
+
+            # Determine which edge each touching point is on
+            # Use a simple heuristic: points on outer edges of the watermark bounds
+            min_y, max_y = np.min(touching_coords[:, 0]), np.max(touching_coords[:, 0])
+            min_x, max_x = np.min(touching_coords[:, 1]), np.max(touching_coords[:, 1])
+
+            edge_groups = {'top': [], 'bottom': [], 'left': [], 'right': []}
+
+            for y, x in touching_coords:
+                # Determine which edge by checking which adjacent direction is outside the watermark
+                is_top = (y > 0 and not core_mask[y-1, x])
+                is_bottom = (y < core_mask.shape[0]-1 and not core_mask[y+1, x])
+                is_left = (x > 0 and not core_mask[y, x-1])
+                is_right = (x < core_mask.shape[1]-1 and not core_mask[y, x+1])
+
+                if is_top:
+                    edge_groups['top'].append((y, x))
+                if is_bottom:
+                    edge_groups['bottom'].append((y, x))
+                if is_left:
+                    edge_groups['left'].append((y, x))
+                if is_right:
+                    edge_groups['right'].append((y, x))
+
+            # Sample from the center point of each edge group
+            sample_colors = []
+            for edge_name, points in edge_groups.items():
+                if len(points) == 0:
+                    continue
+
+                # Find center point of this edge group
+                points = np.array(points)
+                center_idx = len(points) // 2
+                if edge_name in ['top', 'bottom']:
+                    # Sort by x, pick middle
+                    points = points[np.argsort(points[:, 1])]
+                else:
+                    # Sort by y, pick middle
+                    points = points[np.argsort(points[:, 0])]
+
+                center_y, center_x = points[center_idx]
+
+                # Sample from outside the watermark at this center point
+                for dy, dx in [(-1,0), (1,0), (0,-1), (0,1), (-1,-1), (-1,1), (1,-1), (1,1)]:
+                    ny, nx = center_y + dy, center_x + dx
+                    if 0 <= ny < segment_mask.shape[0] and 0 <= nx < segment_mask.shape[1]:
+                        if not core_mask[ny, nx]:
+                            sample_colors.append(corner[ny, nx])
+
+            if len(sample_colors) > 0:
+                sample_colors = np.array(sample_colors)
+                fill_color = np.median(sample_colors, axis=0)
+                print(f"    Segment {segment_id} touches boundary at {np.sum(segment_outer_touching)} points, sampled from {len(sample_colors)} center pixels, fill color: RGB{tuple(fill_color.astype(int))}")
+            else:
+                print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
+                fill_color = np.median(watermark_boundary_colors, axis=0)
 
         corner[segment_coords[:, 0], segment_coords[:, 1]] = fill_color
 
@@ -1786,7 +1871,7 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
                 if algo == 'exemplar':
                     cleaned_algo = exemplar_inpaint_watermark(img_array, template_mask)
                 elif algo == 'segmented':
-                    cleaned_algo = segmented_inpaint_watermark(img_array, template_mask)
+                    cleaned_algo = segmented_inpaint_watermark(img_array, watermark_template)
                 elif algo == 'opencv_telea':
                     cleaned_algo = opencv_inpaint_watermark(img_array, template_mask, 'telea')
                 elif algo == 'opencv_ns':
@@ -1800,13 +1885,12 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
 
                 # Apply a bonus to segmented's score since it empirically performs better than metrics suggest
                 # The Gaussian smoothing reduces measured quality but improves visual results
-                # Only apply bonus if base quality is good (>= 82) to avoid selecting segmented on bad cases
-                # Cases with white content on dark frames score in 75-80 range and perform poorly
+                # Only apply bonus if base quality is reasonable (>= 75) to avoid selecting segmented on bad cases
                 if algo == 'segmented':
                     quality_algo_display = quality_algo['overall']
                     quality_algo = quality_algo.copy()
-                    if quality_algo_display >= 82:
-                        quality_algo['overall'] = min(100, quality_algo['overall'] + 10)  # 10-point bonus
+                    if quality_algo_display >= 75:
+                        quality_algo['overall'] = min(100, quality_algo['overall'] + 12)  # 12-point bonus
                         print(f"  {algo} quality: {quality_algo_display:.1f} (adjusted to {quality_algo['overall']:.1f})")
                     else:
                         print(f"  {algo} quality: {quality_algo_display:.1f} (no bonus, score too low)")
