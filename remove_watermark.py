@@ -1826,11 +1826,11 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             else:
                 print(f"Strategy: Uniform neighbor area (variance={neighbor_variance:.1f}) -> exemplar only")
         # PRIORITY 2: High quality alpha - don't try alternatives to prevent regression
-        elif quality['overall'] >= 92:
-            # Alpha is good, skip alternatives to prevent regression
-            # Analysis shows most regressed images have alpha quality 90-92 where OpenCV scores higher but performs worse
+        elif quality['overall'] >= 95:
+            # Alpha is very good, skip alternatives to prevent regression
+            # Lowered from 92 to 95 to allow more images to try alternative algorithms
             algorithms_to_try = []
-            print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
+            print(f"Strategy: Alpha quality excellent ({quality['overall']:.1f}) -> Using alpha-based only")
         elif bg_variance < 20 and quality['overall'] < 95:
             # LOW variance (uniform area like hellfire's black border) + low quality: Use exemplar + segmented
             # The watermark is in a uniform area and can be filled with nearby pixels
