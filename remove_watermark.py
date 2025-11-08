@@ -1885,12 +1885,13 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
 
                 # Apply a bonus to segmented's score since it empirically performs better than metrics suggest
                 # The Gaussian smoothing reduces measured quality but improves visual results
-                # Only apply bonus if base quality is reasonable (>= 75) to avoid selecting segmented on bad cases
+                # Bonus even at lower scores (>= 60) because highly-textured areas create many small segments
+                # which score poorly but still produce better mean diff than opencv methods
                 if algo == 'segmented':
                     quality_algo_display = quality_algo['overall']
                     quality_algo = quality_algo.copy()
-                    if quality_algo_display >= 75:
-                        quality_algo['overall'] = min(100, quality_algo['overall'] + 12)  # 12-point bonus
+                    if quality_algo_display >= 60:
+                        quality_algo['overall'] = min(100, quality_algo['overall'] + 15)  # 15-point bonus
                         print(f"  {algo} quality: {quality_algo_display:.1f} (adjusted to {quality_algo['overall']:.1f})")
                     else:
                         print(f"  {algo} quality: {quality_algo_display:.1f} (no bonus, score too low)")
