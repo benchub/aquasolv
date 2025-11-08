@@ -244,14 +244,33 @@ def segmented_inpaint_watermark(img_array, template_mask):
     print(f"  Found {len(unique_segments)} color segments in watermark area")
 
     # Find the overall watermark boundary (pixels just outside the ENTIRE watermark, including edges)
-    # Use more dilation to get boundary pixels farther from watermark (less contamination)
+    # Use adaptive dilation: if initial boundary is mostly bright/white, dilate more to get past white frames
     full_watermark_mask = template_mask > 0.01  # Everything with any watermark presence
-    dilated_watermark = binary_dilation(full_watermark_mask, iterations=4)
+
+    # Try initial dilation
+    iterations = 4
+    dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
     watermark_boundary = dilated_watermark & ~full_watermark_mask
-    watermark_boundary_coords = np.argwhere(watermark_boundary)
     watermark_boundary_colors = corner[watermark_boundary]
 
-    print(f"  Watermark boundary has {len(watermark_boundary_coords)} pixels")
+    # Check if boundary is mostly bright (e.g., white frame)
+    boundary_brightness = np.mean(watermark_boundary_colors)
+    # Also check if there's a significant amount of very bright pixels (white frame)
+    very_bright_pct = np.sum(np.mean(watermark_boundary_colors, axis=1) > 230) / len(watermark_boundary_colors) * 100
+
+    if boundary_brightness > 180 or very_bright_pct > 30:
+        # Boundary has too much white, likely sampling white frame instead of actual background
+        # Increase dilation to get past the frame
+        print(f"  Boundary too bright (avg={boundary_brightness:.0f}, {very_bright_pct:.0f}% very bright), increasing dilation")
+        iterations = 15
+        dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
+        watermark_boundary = dilated_watermark & ~full_watermark_mask
+        watermark_boundary_colors = corner[watermark_boundary]
+        boundary_brightness = np.mean(watermark_boundary_colors)
+        very_bright_pct = np.sum(np.mean(watermark_boundary_colors, axis=1) > 230) / len(watermark_boundary_colors) * 100
+
+    watermark_boundary_coords = np.argwhere(watermark_boundary)
+    print(f"  Watermark boundary has {len(watermark_boundary_coords)} pixels (dilation={iterations}, brightness={boundary_brightness:.0f})")
 
     for segment_id in unique_segments:
         # Get pixels in this segment
@@ -260,29 +279,33 @@ def segmented_inpaint_watermark(img_array, template_mask):
         if not np.any(segment_mask):
             continue
 
-        # For this segment, find which boundary pixels are closest
-        # We'll fill each segment pixel with a weighted average of nearby boundary pixels
         segment_coords = np.argwhere(segment_mask)
-
         print(f"  Processing segment {segment_id} with {len(segment_coords)} pixels")
 
-        # For each segment, find which boundary pixels are closest to it
-        # and use those colors (not the global median)
-        if len(watermark_boundary_coords) > 0:
-            # Find the center of this segment
+        # Find boundary pixels that are ADJACENT to this specific segment
+        # Dilate just this segment by 1 pixel to find its immediate neighbors
+        segment_dilated = binary_dilation(segment_mask, iterations=1)
+
+        # Boundary for THIS segment = dilated segment pixels that are:
+        # 1. Outside the entire watermark (in watermark_boundary)
+        # 2. Adjacent to this segment (in segment_dilated)
+        segment_boundary_mask = segment_dilated & (watermark_boundary > 0)
+
+        if not np.any(segment_boundary_mask):
+            # No adjacent boundary found, fall back to nearby boundary pixels
+            print(f"    Warning: No adjacent boundary for segment {segment_id}, using nearby pixels")
             segment_center = np.mean(segment_coords, axis=0)
-
-            # Find distances from segment center to all boundary pixels
             distances = np.sqrt(np.sum((watermark_boundary_coords - segment_center)**2, axis=1))
-
-            # Use the closest 20% of boundary pixels for this segment
             num_closest = max(10, len(distances) // 5)
             closest_indices = np.argsort(distances)[:num_closest]
-            closest_boundary_colors = watermark_boundary_colors[closest_indices]
+            fill_color = np.median(watermark_boundary_colors[closest_indices], axis=0)
+        else:
+            # Get colors from boundary pixels adjacent to this segment
+            segment_boundary_colors = corner[segment_boundary_mask]
+            fill_color = np.median(segment_boundary_colors, axis=0)
+            print(f"    Segment {segment_id} has {np.sum(segment_boundary_mask)} adjacent boundary pixels, fill color: RGB{tuple(fill_color.astype(int))}")
 
-            # Use median of these closest boundary pixels
-            fill_color = np.median(closest_boundary_colors, axis=0)
-            corner[segment_coords[:, 0], segment_coords[:, 1]] = fill_color
+        corner[segment_coords[:, 0], segment_coords[:, 1]] = fill_color
 
     # Step 3: Handle anti-aliased edges
     # For edge pixels with low alpha, just fill them like we do for core pixels
@@ -1777,11 +1800,12 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
 
                 # Apply a bonus to segmented's score since it empirically performs better than metrics suggest
                 # The Gaussian smoothing reduces measured quality but improves visual results
-                # Only apply bonus if base quality is reasonable (>= 78) to avoid selecting segmented on bad cases
+                # Only apply bonus if base quality is good (>= 82) to avoid selecting segmented on bad cases
+                # Cases with white content on dark frames score in 75-80 range and perform poorly
                 if algo == 'segmented':
                     quality_algo_display = quality_algo['overall']
                     quality_algo = quality_algo.copy()
-                    if quality_algo_display >= 78:
+                    if quality_algo_display >= 82:
                         quality_algo['overall'] = min(100, quality_algo['overall'] + 10)  # 10-point bonus
                         print(f"  {algo} quality: {quality_algo_display:.1f} (adjusted to {quality_algo['overall']:.1f})")
                     else:
