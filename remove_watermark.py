@@ -515,8 +515,22 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
             if len(sample_colors) > 0:
                 sample_colors = np.array(sample_colors)
+
+                # Filter out anomalous bright samples that are likely from border frames
+                # Keep samples that are within reasonable range of background reference
+                sample_brightness = np.min(sample_colors, axis=1)
+                bg_brightness = np.min(background_reference)
+
+                # Remove samples that are much brighter than background (>150 units brighter)
+                reasonable_samples = sample_colors[sample_brightness < bg_brightness + 150]
+
+                if len(reasonable_samples) >= len(sample_colors) * 0.3:  # Keep if at least 30% are reasonable
+                    sample_colors = reasonable_samples
+                    print(f"    Segment {segment_id} touches boundary at {np.sum(segment_outer_touching)} points, sampled from {len(sample_colors)} center pixels (filtered {len(sample_colors) - len(reasonable_samples)} bright outliers), fill color: RGB{tuple(np.median(sample_colors, axis=0).astype(int))}")
+                else:
+                    print(f"    Segment {segment_id} touches boundary at {np.sum(segment_outer_touching)} points, sampled from {len(sample_colors)} center pixels, fill color: RGB{tuple(np.median(sample_colors, axis=0).astype(int))}")
+
                 fill_color = np.median(sample_colors, axis=0)
-                print(f"    Segment {segment_id} touches boundary at {np.sum(segment_outer_touching)} points, sampled from {len(sample_colors)} center pixels, fill color: RGB{tuple(fill_color.astype(int))}")
             else:
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
                 fill_color = np.median(watermark_boundary_colors, axis=0)
