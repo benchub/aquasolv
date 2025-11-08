@@ -195,6 +195,14 @@ def segmented_inpaint_watermark(img_array, template_mask):
     result = img_array.copy()
     corner = result[y_start:, x_start:].copy()
 
+    # Pre-sharpen the corner to reduce antialiasing and make watermark edges crisper
+    # This helps segmentation by making color boundaries more distinct
+    from scipy.ndimage import gaussian_filter
+    corner_float = corner.astype(float)
+    blurred = np.stack([gaussian_filter(corner_float[:,:,i], sigma=0.5) for i in range(3)], axis=2)
+    sharpened = corner_float + 0.5 * (corner_float - blurred)  # Unsharp mask
+    corner = np.clip(sharpened, 0, 255).astype(np.uint8)
+
     # Step 1: Find distinct uniform color regions within the watermark
     # Separate core watermark pixels (strong alpha) from anti-aliased edges (weak alpha)
     core_threshold = 0.15  # Pixels with alpha > 0.15 are considered core watermark
@@ -208,7 +216,8 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
     # Quantize colors to find uniform regions
     # Round each color channel to group similar colors together
-    quantized_colors = (watermark_colors // 30) * 30
+    # Using 50 to create fewer, larger segments for better blending
+    quantized_colors = (watermark_colors // 40) * 40
 
     # Create a color map
     color_map = np.zeros((100, 100, 3), dtype=int)
