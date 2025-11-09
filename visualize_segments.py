@@ -141,6 +141,57 @@ for i, info in enumerate(segment_info):
 segment_info = merged_segment_info
 print(f'After merging similar adjacent segments: {len(segment_info)} segments')
 
+# Merge small interior segments into their largest neighbor (matching remove_watermark.py)
+SMALL_SEGMENT_THRESHOLD = 10
+
+# Recompute segment info
+segment_sizes = {info['id']: info['size'] for info in segment_info}
+
+# Find which segments touch the watermark boundary
+full_watermark_mask = template > 0.01
+dilated_watermark = binary_dilation(full_watermark_mask, iterations=1)
+boundary_mask = dilated_watermark & ~full_watermark_mask
+
+segments_touching_boundary = set()
+for info in segment_info:
+    seg_id = info['id']
+    seg_mask = info['mask']
+    seg_dilated = binary_dilation(seg_mask, iterations=1)
+    if np.any(seg_dilated & boundary_mask):
+        segments_touching_boundary.add(seg_id)
+
+# Merge small interior segments
+merged_small = []
+for info in segment_info:
+    seg_id = info['id']
+    if segment_sizes[seg_id] <= SMALL_SEGMENT_THRESHOLD and seg_id not in segments_touching_boundary:
+        # This is a small interior segment - find largest neighbor
+        seg_mask = info['mask']
+        dilated = binary_dilation(seg_mask, iterations=1)
+        adjacent_region = dilated & ~seg_mask & (segments >= 0)
+        adjacent_segs = np.unique(segments[adjacent_region])
+
+        if len(adjacent_segs) > 0:
+            largest_neighbor = max(adjacent_segs, key=lambda s: segment_sizes.get(s, 0))
+            segments[seg_mask] = largest_neighbor
+            merged_small.append((seg_id, largest_neighbor, segment_sizes[seg_id]))
+            # Update sizes
+            for other_info in segment_info:
+                if other_info['id'] == largest_neighbor:
+                    other_info['size'] += segment_sizes[seg_id]
+                    other_info['mask'] = (segments == largest_neighbor)
+                    segment_sizes[largest_neighbor] += segment_sizes[seg_id]
+            print(f"  Merged small interior segment {seg_id} ({segment_sizes[seg_id]}px) into segment {largest_neighbor}")
+
+# Remove merged segments from segment_info
+merged_ids = set(m[0] for m in merged_small)
+segment_info = [info for info in segment_info if info['id'] not in merged_ids]
+
+if merged_small:
+    print(f'After merging {len(merged_small)} small interior segments: {len(segment_info)} segments')
+else:
+    print(f'No small interior segments to merge (still {len(segment_info)} segments)')
+
 # Define distinct colors for visualization
 seg_colors = [
     [255, 0, 0],      # 0: red
@@ -165,6 +216,83 @@ seg_colors = [
     [0, 192, 64],     # 19: teal
 ]
 
+# Calculate boundary and fill colors for each segment
+# Replicate the logic from remove_watermark.py
+full_watermark_mask = template > 0.01
+from scipy.ndimage import binary_dilation
+
+# Compute watermark boundary
+iterations = 4
+dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
+watermark_boundary = dilated_watermark & ~full_watermark_mask
+
+segment_fill_info = {}
+for info in segment_info:
+    seg_id = info['id']
+    seg_mask = info['mask']
+
+    # Check if segment touches boundary
+    seg_dilated = binary_dilation(seg_mask, iterations=1)
+    boundary_contact = seg_dilated & watermark_boundary
+
+    if np.sum(boundary_contact) > 0:
+        # Segment touches boundary - sample from boundary
+        boundary_coords = np.argwhere(boundary_contact)
+        boundary_colors = corner[boundary_contact]
+
+        # Find center pixels for better sampling
+        centroid_y, centroid_x = info['centroid']
+        distances = np.sqrt((boundary_coords[:, 0] - centroid_y)**2 +
+                          (boundary_coords[:, 1] - centroid_x)**2)
+        sorted_indices = np.argsort(distances)
+
+        # Sample from closest boundary pixels
+        num_samples = min(12, len(sorted_indices))
+        sample_indices = sorted_indices[:num_samples]
+        sample_coords = boundary_coords[sample_indices]
+        sample_colors = boundary_colors[sample_indices]
+
+        # Calculate fill color (median)
+        fill_color = np.median(sample_colors, axis=0).astype(int)
+
+        segment_fill_info[seg_id] = {
+            'touches_boundary': True,
+            'sample_coords': sample_coords,
+            'sample_colors': sample_colors,
+            'fill_color': fill_color,
+            'num_boundary_contacts': len(boundary_coords)
+        }
+    else:
+        # Interior segment - find nearest boundary by dilation
+        for dil in range(1, 10):
+            seg_dilated = binary_dilation(seg_mask, iterations=dil)
+            boundary_contact = seg_dilated & watermark_boundary
+            if np.sum(boundary_contact) > 0:
+                boundary_coords = np.argwhere(boundary_contact)
+                boundary_colors = corner[boundary_contact]
+
+                # Sample from closest
+                centroid_y, centroid_x = info['centroid']
+                distances = np.sqrt((boundary_coords[:, 0] - centroid_y)**2 +
+                                  (boundary_coords[:, 1] - centroid_x)**2)
+                sorted_indices = np.argsort(distances)
+                num_samples = min(12, len(sorted_indices))
+                sample_indices = sorted_indices[:num_samples]
+                sample_coords = boundary_coords[sample_indices]
+                sample_colors = boundary_colors[sample_indices]
+
+                fill_color = np.median(sample_colors, axis=0).astype(int)
+
+                segment_fill_info[seg_id] = {
+                    'touches_boundary': False,
+                    'dilation_needed': dil,
+                    'sample_coords': sample_coords,
+                    'sample_colors': sample_colors,
+                    'fill_color': fill_color,
+                    'num_boundary_contacts': len(boundary_coords)
+                }
+                break
+
 # Create visualization
 vis = corner.copy()
 
@@ -173,7 +301,12 @@ for info in segment_info:
     seg_id = info['id']
     color_idx = seg_id % len(seg_colors)
     vis[info['mask']] = seg_colors[color_idx]
-    print(f"Segment {seg_id}: {info['size']} pixels, quantized_color={info['color']}, vis_color={seg_colors[color_idx]}")
+
+    fill_info = segment_fill_info.get(seg_id, {})
+    boundary_status = "touches boundary" if fill_info.get('touches_boundary') else f"interior (dilation={fill_info.get('dilation_needed', '?')})"
+    fill_color = fill_info.get('fill_color', [0, 0, 0])
+
+    print(f"Segment {seg_id}: {info['size']}px, {boundary_status}, fill=RGB{tuple(fill_color)}")
 
 # Create larger canvas with labels outside the image
 # Scale up to 1500x1500 (15x) for better visibility
@@ -182,9 +315,11 @@ vis_img = Image.fromarray(vis)
 vis_scaled = vis_img.resize((100 * scale_factor, 100 * scale_factor), Image.NEAREST)
 
 # Create even larger canvas to add labels outside
-canvas_size = 100 * scale_factor + 400  # Add 200px margin on each side
+# Need more space on sides for labels with fill colors
+canvas_size = 100 * scale_factor + 800  # Add 400px margin on each side
 canvas = Image.new('RGB', (canvas_size, canvas_size), (255, 255, 255))
-canvas.paste(vis_scaled, (200, 200))
+margin = 400
+canvas.paste(vis_scaled, (margin, margin))
 
 # Add labels with lines pointing to segments
 draw = ImageDraw.Draw(canvas)
@@ -192,6 +327,47 @@ try:
     font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 32)
 except:
     font = ImageFont.load_default()
+
+# Draw boundary sample point markers AFTER scaling (so they're not pixelated)
+for info in segment_info:
+    seg_id = info['id']
+    fill_info = segment_fill_info.get(seg_id)
+    if fill_info and 'sample_coords' in fill_info:
+        sample_coords = fill_info['sample_coords']
+
+        # Get segment centroid in scaled coordinates (centered on pixel)
+        centroid_y, centroid_x = info['centroid']
+        centroid_y_scaled = int(centroid_y * scale_factor + scale_factor / 2) + margin
+        centroid_x_scaled = int(centroid_x * scale_factor + scale_factor / 2) + margin
+
+        # Draw lines from each sample point to segment centroid
+        for y, x in sample_coords:
+            # Position on scaled image (centered on pixel, with margin offset)
+            sample_y_scaled = int(y * scale_factor + scale_factor / 2) + margin
+            sample_x_scaled = int(x * scale_factor + scale_factor / 2) + margin
+
+            # Draw line from sample point to centroid (thin, semi-transparent look with gray)
+            draw.line([(sample_x_scaled, sample_y_scaled), (centroid_x_scaled, centroid_y_scaled)],
+                     fill=(128, 128, 128), width=1)
+
+        # Draw small crosses at scaled positions (centered on pixels)
+        for y, x in sample_coords:
+            # Position on scaled image (centered on pixel, with margin offset)
+            cy_scaled = int(y * scale_factor + scale_factor / 2) + margin
+            cx_scaled = int(x * scale_factor + scale_factor / 2) + margin
+
+            # Draw a cross (white with black outline)
+            cross_size = 6
+            # Horizontal line
+            draw.line([(cx_scaled - cross_size, cy_scaled), (cx_scaled + cross_size, cy_scaled)],
+                     fill=(0, 0, 0), width=3)
+            draw.line([(cx_scaled - cross_size, cy_scaled), (cx_scaled + cross_size, cy_scaled)],
+                     fill=(255, 255, 255), width=1)
+            # Vertical line
+            draw.line([(cx_scaled, cy_scaled - cross_size), (cx_scaled, cy_scaled + cross_size)],
+                     fill=(0, 0, 0), width=3)
+            draw.line([(cx_scaled, cy_scaled - cross_size), (cx_scaled, cy_scaled + cross_size)],
+                     fill=(255, 255, 255), width=1)
 
 # Sort segments by y-position to distribute labels evenly
 sorted_segments = sorted(segment_info, key=lambda s: s['centroid'][0])
@@ -205,7 +381,6 @@ def distribute_labels(segments, side):
     if not segments:
         return
 
-    margin = 200
     image_size = 100 * scale_factor
     available_height = image_size
     spacing = available_height / (len(segments) + 1)
@@ -235,15 +410,28 @@ def distribute_labels(segments, side):
         r = 8
         draw.ellipse([(cx_scaled-r, cy_scaled-r), (cx_scaled+r, cy_scaled+r)], fill=(0, 0, 0))
 
-        # Draw label with background
+        # Draw label with background and fill color
+        fill_info = segment_fill_info.get(seg_id, {})
+        fill_color = fill_info.get('fill_color', [0, 0, 0])
         text = f"{seg_id}: {info['size']}px"
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
+        text_line2 = f"fill: RGB{tuple(fill_color)}"
+
+        bbox1 = draw.textbbox((0, 0), text, font=font)
+        bbox2 = draw.textbbox((0, 0), text_line2, font=font)
+        text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
+        text_height = (bbox1[3] - bbox1[1]) + (bbox2[3] - bbox2[1]) + 5
 
         draw.rectangle([text_align_x-5, label_y-text_height//2-5, text_align_x+text_width+5, label_y+text_height//2+5],
                       fill=(255, 255, 255), outline=(0,0,0), width=2)
         draw.text((text_align_x, label_y-text_height//2), text, fill=(0, 0, 0), font=font)
+        draw.text((text_align_x, label_y-text_height//2 + (bbox1[3] - bbox1[1]) + 5), text_line2, fill=(0, 0, 0), font=font)
+
+        # Draw a small color swatch showing the fill color
+        swatch_size = 30
+        swatch_x = text_align_x + text_width + 10
+        swatch_y = label_y - swatch_size // 2
+        draw.rectangle([swatch_x, swatch_y, swatch_x + swatch_size, swatch_y + swatch_size],
+                      fill=tuple(fill_color), outline=(0, 0, 0), width=2)
 
 distribute_labels(left_segments, 'left')
 distribute_labels(right_segments, 'right')
