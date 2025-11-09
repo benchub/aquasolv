@@ -461,75 +461,30 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 fill_color = np.median(watermark_boundary_colors[closest_indices], axis=0)
         else:
             # Segment touches outer boundary
-            # Group touching points by which edge they're on (top/bottom/left/right)
-            # and sample from the center of each edge group
-            touching_coords = np.argwhere(segment_outer_touching)
+            # Dilate segment by 1 pixel to reach outside the watermark, then sample from there
+            # This matches visualize_segments.py approach
 
-            # Determine which edge each touching point is on
-            # Use a simple heuristic: points on outer edges of the watermark bounds
-            min_y, max_y = np.min(touching_coords[:, 0]), np.max(touching_coords[:, 0])
-            min_x, max_x = np.min(touching_coords[:, 1]), np.max(touching_coords[:, 1])
+            segment_dilated = binary_dilation(segment_mask, iterations=1)
+            # Find pixels that are: (1) reached by dilated segment, AND (2) in the watermark boundary ring
+            boundary_contact = segment_dilated & watermark_boundary
 
-            edge_groups = {'top': [], 'bottom': [], 'left': [], 'right': []}
+            # Sample from closest boundary pixels to segment centroid (matches visualize_segments.py)
+            segment_centroid = np.mean(segment_coords, axis=0)
+            boundary_coords = np.argwhere(boundary_contact)
+            boundary_colors = corner[boundary_contact]
 
-            for y, x in touching_coords:
-                # Determine which edge by checking which adjacent direction is outside the watermark
-                is_top = (y > 0 and not core_mask[y-1, x])
-                is_bottom = (y < core_mask.shape[0]-1 and not core_mask[y+1, x])
-                is_left = (x > 0 and not core_mask[y, x-1])
-                is_right = (x < core_mask.shape[1]-1 and not core_mask[y, x+1])
+            # Calculate distances from centroid to each boundary pixel
+            distances = np.sqrt((boundary_coords[:, 0] - segment_centroid[0])**2 +
+                              (boundary_coords[:, 1] - segment_centroid[1])**2)
+            sorted_indices = np.argsort(distances)
 
-                if is_top:
-                    edge_groups['top'].append((y, x))
-                if is_bottom:
-                    edge_groups['bottom'].append((y, x))
-                if is_left:
-                    edge_groups['left'].append((y, x))
-                if is_right:
-                    edge_groups['right'].append((y, x))
-
-            # Sample from the center point of each edge group
-            sample_colors = []
-            for edge_name, points in edge_groups.items():
-                if len(points) == 0:
-                    continue
-
-                # Find center point of this edge group
-                points = np.array(points)
-                center_idx = len(points) // 2
-                if edge_name in ['top', 'bottom']:
-                    # Sort by x, pick middle
-                    points = points[np.argsort(points[:, 1])]
-                else:
-                    # Sort by y, pick middle
-                    points = points[np.argsort(points[:, 0])]
-
-                center_y, center_x = points[center_idx]
-
-                # Sample from outside the watermark at this center point
-                for dy, dx in [(-1,0), (1,0), (0,-1), (0,1), (-1,-1), (-1,1), (1,-1), (1,1)]:
-                    ny, nx = center_y + dy, center_x + dx
-                    if 0 <= ny < segment_mask.shape[0] and 0 <= nx < segment_mask.shape[1]:
-                        if not core_mask[ny, nx]:
-                            sample_colors.append(corner[ny, nx])
+            # Sample from up to 12 closest boundary pixels
+            num_samples = min(12, len(sorted_indices))
+            sample_indices = sorted_indices[:num_samples]
+            sample_colors = boundary_colors[sample_indices]
 
             if len(sample_colors) > 0:
-                sample_colors = np.array(sample_colors)
-
-                # Filter out anomalous bright samples that are likely from border frames
-                # Keep samples that are within reasonable range of background reference
-                sample_brightness = np.min(sample_colors, axis=1)
-                bg_brightness = np.min(background_reference)
-
-                # Remove samples that are much brighter than background (>150 units brighter)
-                reasonable_samples = sample_colors[sample_brightness < bg_brightness + 150]
-
-                if len(reasonable_samples) >= len(sample_colors) * 0.3:  # Keep if at least 30% are reasonable
-                    sample_colors = reasonable_samples
-                    print(f"    Segment {segment_id} touches boundary at {np.sum(segment_outer_touching)} points, sampled from {len(sample_colors)} center pixels (filtered {len(sample_colors) - len(reasonable_samples)} bright outliers), fill color: RGB{tuple(np.median(sample_colors, axis=0).astype(int))}")
-                else:
-                    print(f"    Segment {segment_id} touches boundary at {np.sum(segment_outer_touching)} points, sampled from {len(sample_colors)} center pixels, fill color: RGB{tuple(np.median(sample_colors, axis=0).astype(int))}")
-
+                print(f"    Segment {segment_id} touches boundary at {np.sum(boundary_contact)} points, sampled from {len(sample_colors)} closest pixels to centroid, fill color: RGB{tuple(np.median(sample_colors, axis=0).astype(int))}")
                 fill_color = np.median(sample_colors, axis=0)
             else:
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
