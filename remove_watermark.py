@@ -519,42 +519,44 @@ def segmented_inpaint_watermark(img_array, template_mask):
             corner[ey, ex] = fill_color
 
     # Step 4: Detect and smooth aberrant edge pixels
-    # Look for individual pixels near segment boundaries that differ significantly from neighbors
-    # These are usually artifacts from quantization or unfilled tiny segments
-    from scipy.ndimage import median_filter
-
-    full_mask = template_mask > 0.01
-    watermark_edges = binary_dilation(full_mask, iterations=1) & ~full_mask
-
-    # For each pixel in the filled region, check if it's an outlier compared to neighbors
-    aberrant_pixels = []
-    for y in range(1, 99):
-        for x in range(1, 99):
-            if not core_mask[y, x] and not edge_mask[y, x]:
-                continue
-
-            # Get 3x3 neighborhood
-            neighborhood = corner[max(0,y-1):min(100,y+2), max(0,x-1):min(100,x+2)]
-            if neighborhood.shape[0] < 2 or neighborhood.shape[1] < 2:
-                continue
-
-            center = corner[y, x].astype(float)
-            # Calculate median of neighborhood (excluding center)
-            neighbor_colors = neighborhood.reshape(-1, 3)
-            median_color = np.median(neighbor_colors, axis=0)
-
-            # If center differs significantly from median, it's aberrant
-            diff = np.max(np.abs(center - median_color))
-            if diff > 40:  # Significant difference
-                aberrant_pixels.append((y, x))
-
-    if len(aberrant_pixels) > 0:
-        print(f"  Smoothing {len(aberrant_pixels)} aberrant edge pixels")
-        for y, x in aberrant_pixels:
-            # Replace with 3x3 median
-            neighborhood = corner[max(0,y-1):min(100,y+2), max(0,x-1):min(100,x+2)]
-            neighbor_colors = neighborhood.reshape(-1, 3)
-            corner[y, x] = np.median(neighbor_colors, axis=0)
+    # DISABLED: This post-processing was changing the carefully calculated fill colors
+    # and causing them to not match visualize_segments.py
+    # # Look for individual pixels near segment boundaries that differ significantly from neighbors
+    # # These are usually artifacts from quantization or unfilled tiny segments
+    # from scipy.ndimage import median_filter
+    #
+    # full_mask = template_mask > 0.01
+    # watermark_edges = binary_dilation(full_mask, iterations=1) & ~full_mask
+    #
+    # # For each pixel in the filled region, check if it's an outlier compared to neighbors
+    # aberrant_pixels = []
+    # for y in range(1, 99):
+    #     for x in range(1, 99):
+    #         if not core_mask[y, x] and not edge_mask[y, x]:
+    #             continue
+    #
+    #         # Get 3x3 neighborhood
+    #         neighborhood = corner[max(0,y-1):min(100,y+2), max(0,x-1):min(100,x+2)]
+    #         if neighborhood.shape[0] < 2 or neighborhood.shape[1] < 2:
+    #             continue
+    #
+    #         center = corner[y, x].astype(float)
+    #         # Calculate median of neighborhood (excluding center)
+    #         neighbor_colors = neighborhood.reshape(-1, 3)
+    #         median_color = np.median(neighbor_colors, axis=0)
+    #
+    #         # If center differs significantly from median, it's aberrant
+    #         diff = np.max(np.abs(center - median_color))
+    #         if diff > 40:  # Significant difference
+    #             aberrant_pixels.append((y, x))
+    #
+    # if len(aberrant_pixels) > 0:
+    #     print(f"  Smoothing {len(aberrant_pixels)} aberrant edge pixels")
+    #     for y, x in aberrant_pixels:
+    #         # Replace with 3x3 median
+    #         neighborhood = corner[max(0,y-1):min(100,y+2), max(0,x-1):min(100,x+2)]
+    #         neighbor_colors = neighborhood.reshape(-1, 3)
+    #         corner[y, x] = np.median(neighbor_colors, axis=0)
     #     # Apply gentle blur only in the smoothing region
     #     for channel in range(3):
     #         channel_data = corner[:, :, channel].astype(float)
