@@ -230,9 +230,9 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
     # Quantize colors to find uniform regions
     # Round each color channel to group similar colors together
-    # Using 50 to create larger color bins (groups RGB 120-169 together)
+    # Using 40 to match visualize_segments.py (groups RGB 120-159 together)
     # This prevents sharpening artifacts from creating separate segments
-    quantized_colors = (watermark_colors // 50) * 50
+    quantized_colors = (watermark_colors // 40) * 40
 
     # Create a color map
     color_map = np.zeros((100, 100, 3), dtype=int)
