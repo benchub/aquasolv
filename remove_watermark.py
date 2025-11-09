@@ -508,10 +508,13 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 print(f"    Warning: Small segment {segment_id} ({len(segment_coords)}px) got bright fill (brightness={fill_brightness:.0f}), using background reference instead")
                 fill_color = background_reference
 
-        corner[segment_coords[:, 0], segment_coords[:, 1]] = fill_color
+        # Expand the segment by 2 pixels to cover anti-aliased halo
+        segment_expanded = binary_dilation(segment_mask, iterations=2)
+        segment_expanded_coords = np.argwhere(segment_expanded)
+        corner[segment_expanded_coords[:, 0], segment_expanded_coords[:, 1]] = fill_color
         # DEBUG: Verify what was written
         sample_pixel = corner[segment_coords[0, 0], segment_coords[0, 1]]
-        print(f"    DEBUG: After filling, pixel at {tuple(segment_coords[0])} = RGB{tuple(sample_pixel)} = #{sample_pixel[0]:02x}{sample_pixel[1]:02x}{sample_pixel[2]:02x}")
+        print(f"    DEBUG: After filling {len(segment_expanded_coords)} pixels (expanded from {len(segment_coords)}), pixel at {tuple(segment_coords[0])} = RGB{tuple(sample_pixel)} = #{sample_pixel[0]:02x}{sample_pixel[1]:02x}{sample_pixel[2]:02x}")
 
     # Step 3: Handle anti-aliased edges
     # For edge pixels with low alpha, just fill them like we do for core pixels
