@@ -209,7 +209,8 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
     # Step 1: Find distinct uniform color regions within the watermark
     # Separate core watermark pixels (strong alpha) from anti-aliased edges (weak alpha)
-    core_threshold = 0.15  # Pixels with alpha > 0.15 are considered core watermark
+    # Lowered from 0.15 to 0.05 to capture more anti-aliased halo pixels in segments
+    core_threshold = 0.05  # Pixels with alpha > 0.05 are considered core watermark
     core_mask = template_mask > core_threshold
     # Include more edge pixels by lowering threshold from 0.01 to 0.005
     edge_mask = (template_mask > 0.005) & (template_mask <= core_threshold)
