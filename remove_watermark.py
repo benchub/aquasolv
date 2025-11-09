@@ -195,6 +195,10 @@ def segmented_inpaint_watermark(img_array, template_mask):
     result = img_array.copy()
     corner = result[y_start:, x_start:].copy()
 
+    # Save original corner for sampling colors (before sharpening)
+    # We need original colors to match visualize_segments.py
+    corner_original = corner.copy()
+
     # Pre-sharpen the corner to reduce antialiasing and make watermark edges crisper
     # This helps segmentation by making color boundaries more distinct
     from scipy.ndimage import gaussian_filter
@@ -371,7 +375,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
     iterations = 4
     dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
     watermark_boundary = dilated_watermark & ~full_watermark_mask
-    watermark_boundary_colors = corner[watermark_boundary]
+    watermark_boundary_colors = corner_original[watermark_boundary]
 
     # Check if boundary is mostly bright (e.g., white frame)
     boundary_brightness = np.mean(watermark_boundary_colors)
@@ -385,7 +389,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
         iterations = 15
         dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
         watermark_boundary = dilated_watermark & ~full_watermark_mask
-        watermark_boundary_colors = corner[watermark_boundary]
+        watermark_boundary_colors = corner_original[watermark_boundary]
         boundary_brightness = np.mean(watermark_boundary_colors)
         very_bright_pct = np.sum(np.mean(watermark_boundary_colors, axis=1) > 230) / len(watermark_boundary_colors) * 100
 
@@ -471,7 +475,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
             # Sample from closest boundary pixels to segment centroid (matches visualize_segments.py)
             segment_centroid = np.mean(segment_coords, axis=0)
             boundary_coords = np.argwhere(boundary_contact)
-            boundary_colors = corner[boundary_contact]
+            boundary_colors = corner_original[boundary_contact]
 
             # Calculate distances from centroid to each boundary pixel
             distances = np.sqrt((boundary_coords[:, 0] - segment_centroid[0])**2 +
@@ -484,8 +488,11 @@ def segmented_inpaint_watermark(img_array, template_mask):
             sample_colors = boundary_colors[sample_indices]
 
             if len(sample_colors) > 0:
-                print(f"    Segment {segment_id} touches boundary at {np.sum(boundary_contact)} points, sampled from {len(sample_colors)} closest pixels to centroid, fill color: RGB{tuple(np.median(sample_colors, axis=0).astype(int))}")
                 fill_color = np.median(sample_colors, axis=0)
+                print(f"    Segment {segment_id} touches boundary at {np.sum(boundary_contact)} points, sampled from {len(sample_colors)} closest pixels to centroid")
+                print(f"    DEBUG: Sampled colors: {sample_colors.tolist()}")
+                print(f"    DEBUG: Calculated fill_color = RGB{tuple(fill_color.astype(int))} = #{int(fill_color[0]):02x}{int(fill_color[1]):02x}{int(fill_color[2]):02x}")
+                print(f"    DEBUG: About to fill {len(segment_coords)} pixels with this color")
             else:
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
                 fill_color = np.median(watermark_boundary_colors, axis=0)
@@ -501,6 +508,9 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 fill_color = background_reference
 
         corner[segment_coords[:, 0], segment_coords[:, 1]] = fill_color
+        # DEBUG: Verify what was written
+        sample_pixel = corner[segment_coords[0, 0], segment_coords[0, 1]]
+        print(f"    DEBUG: After filling, pixel at {tuple(segment_coords[0])} = RGB{tuple(sample_pixel)} = #{sample_pixel[0]:02x}{sample_pixel[1]:02x}{sample_pixel[2]:02x}")
 
     # Step 3: Handle anti-aliased edges
     # For edge pixels with low alpha, just fill them like we do for core pixels
