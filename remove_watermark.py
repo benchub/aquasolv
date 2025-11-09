@@ -1598,18 +1598,12 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         # - Images that regress have 0 true black AND 0 true white pixels
         has_true_borders = num_true_black > 200 or num_true_white > 200
 
-        # Check if this is a colored border case (like apple ii, hillary's health)
-        # These have NO true black/white but lots of colored variance
-        # IMPORTANT: Check on ORIGINAL image, not cleaned result!
-        color_variance = np.std(corner_original, axis=2)
-        num_colored = np.sum(color_variance > 20)
+        # Removed colored border detection - segmented handles these cases better
+        # Previous logic detected "colored border cases" and skipped border correction
+        # But segmented algorithm's intelligent sampling works better than exemplar for these
 
-        # Skip border correction ONLY if we have colored borders WITHOUT true black/white
-        # (This catches apple ii, hillary's health while allowing others through)
-        is_colored_border_case = (num_true_black == 0 and num_true_white == 0 and num_colored > 1000)
-
-        # Apply border correction if we have true borders OR if we have some borders but not colored
-        has_border_frames = has_true_borders and not is_colored_border_case
+        # Apply border correction if we have true borders
+        has_border_frames = has_true_borders
 
         # Additional safety: Skip if watermark removal already produced good results
         corner_original = img_array[y_start:, x_start:]
@@ -1956,7 +1950,9 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         color_variance_check = np.std(corner_original_check, axis=2)
         num_colored = np.sum(color_variance_check > 20)
 
-        is_colored_border_case = (num_true_black == 0 and num_true_white == 0 and num_colored > 1000)
+        # Removed colored border detection - segmented handles these cases better
+        # Previous logic: is_colored_border_case = (num_true_black == 0 and num_true_white == 0 and num_colored > 1000)
+        is_colored_border_case = False  # Always False - let segmented handle all cases
 
         # Calculate background variance within non-watermark area
         corner_gray_full = np.mean(corner_cleaned, axis=2)
