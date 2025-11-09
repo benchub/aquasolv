@@ -1979,30 +1979,38 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         else:
             neighbor_variance = np.std(corner_original_check_gray[~template_mask])  # Fallback to all non-watermark
 
-        print(f"Image characteristics: colored_border={is_colored_border_case}, bg_variance={bg_variance:.1f}, neighbor_variance={neighbor_variance:.1f}, true_black={num_true_black}, true_white={num_true_white}")
+        # Gradient detection temporarily disabled - causes hanging
+        # TODO: Fix gradient detection implementation
+        has_gradient = False
+
+        print(f"Image characteristics: colored_border={is_colored_border_case}, bg_variance={bg_variance:.1f}, neighbor_variance={neighbor_variance:.1f}, has_gradient={has_gradient}, true_black={num_true_black}, true_white={num_true_white}")
+
+        # Check for uniform solid borders (used in multiple decision points below)
+        has_solid_border = (num_true_black > 5000 or num_true_white > 5000)
+        is_uniform_solid_border = has_solid_border and neighbor_variance < 50
 
         # Decide which algorithms to try based on characteristics
         algorithms_to_try = []
 
-        # PRIORITY 1: Uniform local area - ALWAYS use exemplar regardless of quality score
-        # This includes:
-        # - Colored borders (no true black/white, high color variance)
-        # - Uniform neighbor area (low variance near watermark)
-        # - Uniform solid borders (lots of true black/white pixels AND low neighbor variance)
-        #   Like hellfire's black border (7728 black, variance=28.8)
-        #   NOT like earl's cove (6652 black, variance=82.1 - complex texture)
-        # Must check BEFORE quality threshold to avoid skipping
-        has_solid_border = (num_true_black > 5000 or num_true_white > 5000)
-        is_uniform_solid_border = has_solid_border and neighbor_variance < 50
-
-        if is_colored_border_case or neighbor_variance < 10 or is_uniform_solid_border:
-            # Watermark is in a uniform/solid area - exemplar works best
+        # PRIORITY 0: Gradient background - AVOID segmented, use exemplar or alpha
+        # Segmented fills uniformly and cannot recreate gradients
+        if has_gradient:
+            if quality['overall'] >= 92:
+                # Alpha handles gradients reasonably well
+                algorithms_to_try = []
+                print(f"Strategy: Gradient detected + good alpha quality ({quality['overall']:.1f}) -> Using alpha only")
+            else:
+                # Low quality alpha on gradient - try exemplar or OpenCV
+                algorithms_to_try = ['exemplar', 'opencv_telea']
+                print(f"Strategy: Gradient detected + low alpha quality ({quality['overall']:.1f}) -> exemplar + OpenCV (avoiding segmented)")
+        # PRIORITY 1: VERY uniform areas only - use exemplar
+        # Only skip segmented for EXTREMELY uniform cases where exemplar is clearly better
+        # Tightened from neighbor_variance < 10 to < 5 to allow segmented to run more often
+        elif neighbor_variance < 5 or is_uniform_solid_border:
+            # Watermark is in a VERY uniform/solid area - exemplar works best
             # Exemplar achieves near-perfect results by copying nearby pixels
-            # Alpha-based blurring damages uniform areas
             algorithms_to_try = ['exemplar']
-            if is_colored_border_case:
-                print("Strategy: Colored borders detected -> exemplar only")
-            elif is_uniform_solid_border:
+            if is_uniform_solid_border:
                 print(f"Strategy: Uniform solid border ({num_true_black} black, {num_true_white} white, variance={neighbor_variance:.1f}) -> exemplar only")
             else:
                 print(f"Strategy: Uniform neighbor area (variance={neighbor_variance:.1f}) -> exemplar only")
@@ -2038,12 +2046,30 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             print(f"Strategy: Alpha quality good ({quality['overall']:.1f}) -> Using alpha-based only")
 
         # Store all results: (algorithm_name, cleaned_image, quality_score)
-        # IMPORTANT: For uniform/solid areas, don't include alpha!
-        # Exemplar is always better for uniform areas, but quality metrics favor alpha
-        if is_colored_border_case or neighbor_variance < 10 or is_uniform_solid_border:
-            results = []  # Start with empty list, only add algorithms we try (exemplar)
+        # FORCE segmented as baseline (achieves 97.08% vs alpha's 96.51%)
+        # Only skip for extreme solid borders (hellfire, k-pop road rage)
+        # Everything else gets segmented to match the 97.08% forced result
+        if is_uniform_solid_border:
+            results = []  # Start with empty list, will use exemplar only
         else:
-            results = [('alpha', cleaned, quality)]  # Include alpha as baseline
+            # Run segmented as baseline for ALL normal cases
+            print("Running segmented as baseline...")
+            try:
+                segmented_baseline = segmented_inpaint_watermark(img_array, watermark_template)
+                segmented_corner = segmented_baseline[height - corner_size:, width - corner_size:]
+                segmented_quality = assess_removal_quality(segmented_corner, template_mask)
+                # Apply segmented bonus (it scores lower but performs better)
+                segmented_quality_display = segmented_quality['overall']
+                if segmented_quality_display >= 60:
+                    segmented_quality = segmented_quality.copy()
+                    segmented_quality['overall'] = min(100, segmented_quality['overall'] + 15)
+                    print(f"  Segmented baseline quality: {segmented_quality_display:.1f} (adjusted to {segmented_quality['overall']:.1f})")
+                else:
+                    print(f"  Segmented baseline quality: {segmented_quality_display:.1f} (no bonus)")
+                results = [('segmented', segmented_baseline, segmented_quality)]
+            except Exception as e:
+                print(f"  Segmented baseline failed: {e}, falling back to alpha")
+                results = [('alpha', cleaned, quality)]
 
         # Try each selected algorithm
         for algo in algorithms_to_try:
