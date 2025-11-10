@@ -119,54 +119,6 @@ def assess_removal_quality(cleaned_corner, mask_corner):
     }
 
 
-def exemplar_inpaint_watermark(img_array, template_mask):
-    """
-    Use exemplar-based inpainting (weighted averaging from nearby pixels).
-    Best for colored borders and uniform areas.
-
-    Args:
-        img_array: Original image array
-        template_mask: Boolean mask of watermark pixels (from template)
-
-    Returns:
-        Inpainted image array
-    """
-    height, width = img_array.shape[:2]
-    corner_size = 100
-    y_start = height - corner_size
-    x_start = width - corner_size
-
-    result = img_array.copy()
-    corner = result[y_start:, x_start:].copy()
-
-    # For each watermark pixel, find nearest non-watermark pixels
-    for y in range(corner_size):
-        for x in range(corner_size):
-            if template_mask[y, x]:
-                # Find nearest non-watermark pixels in same row/column
-                samples = []
-                weights = []
-
-                # Search in all 4 directions
-                for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    for dist in range(1, 30):  # Search up to 30 pixels away
-                        ny, nx = y + dy * dist, x + dx * dist
-                        if 0 <= ny < corner_size and 0 <= nx < corner_size:
-                            if not template_mask[ny, nx]:
-                                samples.append(corner[ny, nx])
-                                weights.append(1.0 / (dist + 1))  # Inverse distance weighting
-                                break
-
-                # Use weighted average of samples
-                if len(samples) > 0:
-                    weights_array = np.array(weights)
-                    weights_array = weights_array / weights_array.sum()  # Normalize
-                    corner[y, x] = np.average(samples, axis=0, weights=weights_array)
-
-    result[y_start:, x_start:] = corner
-    return result
-
-
 def segmented_inpaint_watermark(img_array, template_mask):
     """
     Segmentation-based inpainting: detect color boundaries within the watermark
@@ -214,17 +166,6 @@ def segmented_inpaint_watermark(img_array, template_mask):
     core_mask = template_mask > core_threshold
     # Include more edge pixels by lowering threshold from 0.01 to 0.005
     edge_mask = (template_mask > 0.005) & (template_mask <= core_threshold)
-
-    # DISABLED: False positive filtering was removing legitimate white watermark segments
-    # visualize_segments.py doesn't do this filtering, and the segmentation algorithm
-    # handles white segments correctly by detecting them as separate color segments
-    # pixel_brightness = np.min(corner, axis=2)  # Minimum channel value
-    # is_very_bright = pixel_brightness >= 240
-    # false_positive_mask = core_mask & is_very_bright
-    # original_core_count = np.sum(core_mask)
-    # core_mask = core_mask & ~false_positive_mask
-    # if np.sum(false_positive_mask) > 0:
-    #     print(f"  Filtered out {np.sum(false_positive_mask)} false positive bright pixels from core mask")
 
     watermark_coords = np.argwhere(core_mask)
     watermark_colors = corner[core_mask]
@@ -496,16 +437,6 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
                 fill_color = np.median(watermark_boundary_colors, axis=0)
 
-        # DISABLED: This "small segment bright fill" logic doesn't exist in visualize_segments.py
-        # It was causing discrepancies where small white segments were incorrectly replaced
-        # with dark background colors, making white areas appear thicker than they should be
-        # if len(segment_coords) <= 20:
-        #     fill_brightness = np.mean(fill_color)
-        #     bg_brightness = np.mean(background_reference)
-        #     if fill_brightness > bg_brightness + 100:
-        #         print(f"    Warning: Small segment {segment_id} ({len(segment_coords)}px) got bright fill (brightness={fill_brightness:.0f}), using background reference instead")
-        #         fill_color = background_reference
-
         # Expand the segment to cover anti-aliased halo
         # Use less expansion for bright segments to avoid making white borders thicker
         fill_brightness = np.mean(fill_color)
@@ -543,87 +474,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
             fill_color = np.median(closest_boundary_colors, axis=0)
             corner[ey, ex] = fill_color
 
-    # Step 4: Detect and smooth aberrant edge pixels
-    # DISABLED: This post-processing was changing the carefully calculated fill colors
-    # and causing them to not match visualize_segments.py
-    # # Look for individual pixels near segment boundaries that differ significantly from neighbors
-    # # These are usually artifacts from quantization or unfilled tiny segments
-    # from scipy.ndimage import median_filter
-    #
-    # full_mask = template_mask > 0.01
-    # watermark_edges = binary_dilation(full_mask, iterations=1) & ~full_mask
-    #
-    # # For each pixel in the filled region, check if it's an outlier compared to neighbors
-    # aberrant_pixels = []
-    # for y in range(1, 99):
-    #     for x in range(1, 99):
-    #         if not core_mask[y, x] and not edge_mask[y, x]:
-    #             continue
-    #
-    #         # Get 3x3 neighborhood
-    #         neighborhood = corner[max(0,y-1):min(100,y+2), max(0,x-1):min(100,x+2)]
-    #         if neighborhood.shape[0] < 2 or neighborhood.shape[1] < 2:
-    #             continue
-    #
-    #         center = corner[y, x].astype(float)
-    #         # Calculate median of neighborhood (excluding center)
-    #         neighbor_colors = neighborhood.reshape(-1, 3)
-    #         median_color = np.median(neighbor_colors, axis=0)
-    #
-    #         # If center differs significantly from median, it's aberrant
-    #         diff = np.max(np.abs(center - median_color))
-    #         if diff > 40:  # Significant difference
-    #             aberrant_pixels.append((y, x))
-    #
-    # if len(aberrant_pixels) > 0:
-    #     print(f"  Smoothing {len(aberrant_pixels)} aberrant edge pixels")
-    #     for y, x in aberrant_pixels:
-    #         # Replace with 3x3 median
-    #         neighborhood = corner[max(0,y-1):min(100,y+2), max(0,x-1):min(100,x+2)]
-    #         neighbor_colors = neighborhood.reshape(-1, 3)
-    #         corner[y, x] = np.median(neighbor_colors, axis=0)
-    #     # Apply gentle blur only in the smoothing region
-    #     for channel in range(3):
-    #         channel_data = corner[:, :, channel].astype(float)
-    #         blurred = gaussian_filter(channel_data, sigma=0.8)
-    #
-    #         # Blend original and blurred based on distance from watermark edge
-    #         # Keep areas far from watermark unchanged, blend near edges
-    #         corner[:, :, channel] = np.where(smooth_mask, blurred, channel_data)
-
     result[y_start:, x_start:] = corner
-    return result
-
-
-def opencv_inpaint_watermark(img_array, template_mask, method='telea'):
-    """
-    Use OpenCV's inpainting algorithms to remove watermark.
-
-    Args:
-        img_array: Original image array
-        template_mask: Boolean mask of watermark pixels (from template)
-        method: 'telea' or 'ns' (Navier-Stokes)
-
-    Returns:
-        Inpainted image array
-    """
-    height, width = img_array.shape[:2]
-    corner_size = 100
-    y_start = height - corner_size
-    x_start = width - corner_size
-
-    result = img_array.copy()
-    corner = result[y_start:, x_start:].copy()
-
-    # Convert mask to uint8 format (required by OpenCV)
-    mask_uint8 = (template_mask * 255).astype(np.uint8)
-
-    if method == 'ns':
-        inpainted = cv2.inpaint(corner, mask_uint8, inpaintRadius=3, flags=cv2.INPAINT_NS)
-    else:  # telea
-        inpainted = cv2.inpaint(corner, mask_uint8, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-
-    result[y_start:, x_start:] = inpainted
     return result
 
 
@@ -1998,53 +1849,10 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
                 print(f"  Segmented baseline failed: {e}, falling back to alpha")
                 results = [('alpha', cleaned, quality)]
 
-        # Try each selected algorithm
-        for algo in algorithms_to_try:
-            print(f"Trying {algo}...")
-            try:
-                if algo == 'exemplar':
-                    cleaned_algo = exemplar_inpaint_watermark(img_array, template_mask)
-                elif algo == 'segmented':
-                    cleaned_algo = segmented_inpaint_watermark(img_array, watermark_template)
-                elif algo == 'opencv_telea':
-                    cleaned_algo = opencv_inpaint_watermark(img_array, template_mask, 'telea')
-                elif algo == 'opencv_ns':
-                    cleaned_algo = opencv_inpaint_watermark(img_array, template_mask, 'ns')
-                else:
-                    continue
-
-                # Assess quality of this algorithm's result
-                cleaned_algo_corner = cleaned_algo[height - corner_size:, width - corner_size:]
-                quality_algo = assess_removal_quality(cleaned_algo_corner, template_mask)
-
-                # Apply a bonus to segmented's score since it empirically performs better than metrics suggest
-                # The Gaussian smoothing reduces measured quality but improves visual results
-                # Bonus even at lower scores (>= 60) because highly-textured areas create many small segments
-                # which score poorly but still produce better mean diff than opencv methods
-                if algo == 'segmented':
-                    quality_algo_display = quality_algo['overall']
-                    quality_algo = quality_algo.copy()
-                    if quality_algo_display >= 60:
-                        quality_algo['overall'] = min(100, quality_algo['overall'] + 15)  # 15-point bonus
-                        print(f"  {algo} quality: {quality_algo_display:.1f} (adjusted to {quality_algo['overall']:.1f})")
-                    else:
-                        print(f"  {algo} quality: {quality_algo_display:.1f} (no bonus, score too low)")
-                else:
-                    print(f"  {algo} quality: {quality_algo['overall']:.1f}")
-
-                results.append((algo, cleaned_algo, quality_algo))
-            except Exception as e:
-                print(f"  {algo} failed: {e}")
-
-        # Select the best result by adjusted quality score
-        # (Segmented already has a +7 bonus applied above)
-        results_sorted = sorted(results, key=lambda x: x[2]['overall'], reverse=True)
-        best_algo, cleaned, quality = results_sorted[0]
-
-        if best_algo != 'alpha':
-            print(f"Selected {best_algo} with quality {quality['overall']:.1f} (alpha was {results[0][2]['overall']:.1f})")
-        else:
-            print(f"Selected alpha-based with quality {quality['overall']:.1f}")
+        # Since algorithms_to_try is empty, results contains only segmented
+        # Select it directly
+        best_algo, cleaned, quality = results[0]
+        print(f"Selected {best_algo} with quality {quality['overall']:.1f}")
 
     return cleaned, quality, mask
 
