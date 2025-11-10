@@ -71,10 +71,23 @@ seg_colors = [
 full_watermark_mask = template > 0.01
 from scipy.ndimage import binary_dilation
 
-# Compute watermark boundary
+# Compute watermark boundary with adaptive dilation
 iterations = 4
 dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
 watermark_boundary = dilated_watermark & ~full_watermark_mask
+
+# Check if boundary is mostly bright (e.g., white frame) - if so, increase dilation
+watermark_boundary_colors = corner[watermark_boundary]
+boundary_brightness = np.mean(watermark_boundary_colors)
+very_bright_pct = np.sum(np.mean(watermark_boundary_colors, axis=1) > 230) / len(watermark_boundary_colors) * 100
+
+if boundary_brightness > 180 or very_bright_pct > 30:
+    # Boundary has too much white, likely sampling white frame instead of actual background
+    # Increase dilation to get past the frame
+    print(f"Boundary too bright (avg={boundary_brightness:.0f}, {very_bright_pct:.0f}% very bright), increasing dilation to 15")
+    iterations = 15
+    dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
+    watermark_boundary = dilated_watermark & ~full_watermark_mask
 
 segment_fill_info = {}
 for info in segment_info:
