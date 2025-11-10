@@ -139,8 +139,8 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                 adjacency.add((min(seg_id, adj_seg), max(seg_id, adj_seg)))
 
     # Merge adjacent segments with similar colors
-    # Use a threshold that prevents excessive chaining
-    COLOR_SIMILARITY_THRESHOLD = 30
+    # Use a threshold that prevents excessive chaining while allowing gradual transitions
+    COLOR_SIMILARITY_THRESHOLD = 25
     merge_map = {info['id']: info['id'] for info in segment_info}
     # Track the color range of each merged group to prevent over-merging
     group_color_min = {info['id']: np.array(info['color'], dtype=np.int32) for info in segment_info}
@@ -165,7 +165,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                 span = np.max(new_max - new_min)
 
                 # Only merge if the resulting group's color span is reasonable
-                MAX_GROUP_SPAN = 45  # Maximum allowed color range within a merged group
+                MAX_GROUP_SPAN = 40  # Maximum allowed color range within a merged group
                 if span <= MAX_GROUP_SPAN:
                     merge_map[root2] = root1
                     # Update color range of the merged group
