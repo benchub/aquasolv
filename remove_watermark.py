@@ -344,41 +344,8 @@ def segmented_inpaint_watermark(img_array, template_mask):
             sample_colors = boundary_colors[sample_indices]
 
             if len(sample_colors) > 0:
-                # Filter outliers by keeping only samples close to the majority cluster
-                if len(sample_colors) >= 4:
-                    luminance = np.mean(sample_colors, axis=1)
-
-                    # Find the largest cluster by looking for the mode region
-                    # Sort luminance and find gaps larger than 50
-                    sorted_lum = np.sort(luminance)
-                    gaps = np.diff(sorted_lum)
-
-                    if len(gaps) > 0 and np.max(gaps) > 50:  # If there's a significant gap (>50)
-                        # Find the first large gap (>50) and split into two clusters
-                        large_gap_idx = np.where(gaps > 50)[0][0] + 1
-                        cluster1 = sorted_lum[:large_gap_idx]
-                        cluster2 = sorted_lum[large_gap_idx:]
-
-                        # Keep the larger cluster (more samples = more reliable)
-                        if len(cluster1) >= len(cluster2):
-                            cluster = cluster1
-                        else:
-                            cluster = cluster2
-
-                        selected_cluster_mean = np.mean(cluster)
-                        threshold = np.std(cluster) * 2 if len(cluster) > 1 else 20
-                        mask = np.abs(luminance - selected_cluster_mean) <= threshold
-                    else:
-                        # No significant gap, use MAD on all samples
-                        median_lum = np.median(luminance)
-                        mad = np.median(np.abs(luminance - median_lum))
-                        threshold = 1.5 * mad if mad > 0 else 50
-                        mask = np.abs(luminance - median_lum) <= threshold
-
-                    filtered_colors = sample_colors[mask]
-                    if len(filtered_colors) > 0:
-                        sample_colors = filtered_colors
-
+                # Use simple median - matches visualize_segments.py
+                # Farthest-point sampling already ensures good distribution
                 fill_color = np.median(sample_colors, axis=0)
                 print(f"    Segment {segment_id} touches boundary at {np.sum(boundary_contact)} points, sampled from {len(sample_colors)} closest pixels to centroid")
             else:
