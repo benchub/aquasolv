@@ -162,9 +162,9 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
     # Step 1: Find distinct uniform color regions within the watermark using shared segmentation logic
     # Lowered from 0.15 to 0.05 to capture more anti-aliased halo pixels in segments
-    # Using quantization=50 to group similar colors (e.g. RGB 61-96 green shades)
+    # Using auto quantization for adaptive color distinction
     core_threshold = 0.05
-    seg_result = find_segments(corner, template_mask, quantization=50, core_threshold=core_threshold)
+    seg_result = find_segments(corner, template_mask, core_threshold=core_threshold)
     segments = seg_result['segments']
     segment_info = seg_result['segment_info']
     core_mask = seg_result['core_mask']

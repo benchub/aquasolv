@@ -41,7 +41,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             # For low variance (similar colors), use finer quantization
             if color_std > 40:
                 quantization = 30  # Coarse for diverse colors
-            elif color_std > 20:
+            elif color_std > 25:
                 quantization = 20  # Medium
             else:
                 quantization = 15  # Fine for very similar colors
