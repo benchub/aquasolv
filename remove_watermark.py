@@ -1801,27 +1801,9 @@ def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_
     print(f"Processing {input_path}...")
     print(f"Image size: {img_array.shape}")
 
-    # Check for L-pattern (borders through sparkle peaks)
-    has_L_pattern = detect_L_pattern(img_array)
-
-    if has_L_pattern:
-        # Use template-based algorithm for L-pattern cases (97%+ accuracy)
-        cleaned = remove_watermark_template_based(img_array)
-
-        if cleaned is not None:
-            # Template-based removal succeeded
-            cleaned = np.clip(cleaned, 0, 255).astype(np.uint8)
-
-            # Save result
-            if output_path is None:
-                output_path = input_path.rsplit('.', 1)[0] + '_cleaned.png'
-
-            Image.fromarray(cleaned).save(output_path)
-            print(f"Saved to: {output_path}")
-            return
-
-        # If template-based failed, fall through to standard algorithm
-        print("Template-based removal not available, using standard algorithm")
+    # Note: L-pattern detection disabled - now using multi-algorithm selection
+    # which includes segmented approach that better handles color boundaries
+    # has_L_pattern = detect_L_pattern(img_array)
 
     # Standard algorithm - try multiple thresholds if requested
     if try_multiple_thresholds and threshold is None:
