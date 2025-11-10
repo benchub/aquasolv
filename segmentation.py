@@ -35,17 +35,40 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     if quantization is None:
         watermark_colors = corner[core_mask]
         if len(watermark_colors) > 0:
-            # Calculate variance in RGB values
+            # Calculate two key metrics:
+            # 1. Overall color diversity (standard deviation)
             color_std = np.std(watermark_colors, axis=0).mean()
-            # For high variance (diverse colors), use coarser quantization
-            # For low variance (similar colors), use finer quantization
-            if color_std > 40:
-                quantization = 30  # Coarse for diverse colors
-            elif color_std > 25:
+
+            # 2. Number of unique colors at q=15 (potential segments)
+            # This helps detect when coarse quantization would merge distinct colors
+            quantized_15 = (watermark_colors // 15) * 15
+            unique_colors_q15 = len(np.unique(quantized_15.view(np.dtype((np.void,
+                                                quantized_15.dtype.itemsize * 3)))))
+
+            # Hybrid approach: Use BOTH metrics for better detection
+            # Fine quantization (q=15) when either:
+            #   - Many distinct color regions (unique_q15 > 12), OR
+            #   - High color diversity (std > 30)
+            # Medium quantization (q=20) when either:
+            #   - Some color regions (unique_q15 > 6), OR
+            #   - Moderate diversity (std > 12)
+            # Coarse quantization (q=30) for simple/uniform colors
+            #
+            # Note: Lower thresholds since we're analyzing core_mask which excludes
+            # edges and may undercount color diversity. Threshold of >12 for unique_q15
+            # typically indicates 3+ distinct color regions after merging.
+
+            if unique_colors_q15 > 12 or color_std > 30:
+                quantization = 15  # Fine - preserves distinct color regions
+                reason = f'unique_q15={unique_colors_q15}, std={color_std:.1f}'
+            elif unique_colors_q15 > 6 or color_std > 12:
                 quantization = 20  # Medium
+                reason = f'unique_q15={unique_colors_q15}, std={color_std:.1f}'
             else:
-                quantization = 15  # Fine for very similar colors
-            print(f'Auto-selected quantization: {quantization} (color_std={color_std:.2f})')
+                quantization = 30  # Coarse - simple colors
+                reason = f'unique_q15={unique_colors_q15}, std={color_std:.1f}'
+
+            print(f'Auto-selected quantization: {quantization} ({reason})')
         else:
             quantization = 20  # Fallback
 
