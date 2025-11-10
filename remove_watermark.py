@@ -506,9 +506,22 @@ def segmented_inpaint_watermark(img_array, template_mask):
         #         print(f"    Warning: Small segment {segment_id} ({len(segment_coords)}px) got bright fill (brightness={fill_brightness:.0f}), using background reference instead")
         #         fill_color = background_reference
 
-        # Expand the segment by 2 pixels to cover anti-aliased halo
-        segment_expanded = binary_dilation(segment_mask, iterations=2)
-        segment_expanded_coords = np.argwhere(segment_expanded)
+        # Expand the segment to cover anti-aliased halo
+        # Use less expansion for bright segments to avoid making white borders thicker
+        fill_brightness = np.mean(fill_color)
+        if fill_brightness > 200:
+            # Bright segments (white borders) - no expansion to preserve border thickness
+            expansion_iterations = 0
+        else:
+            # Dark/colored segments - more expansion for halo coverage
+            expansion_iterations = 2
+
+        if expansion_iterations > 0:
+            segment_expanded = binary_dilation(segment_mask, iterations=expansion_iterations)
+            segment_expanded_coords = np.argwhere(segment_expanded)
+        else:
+            segment_expanded_coords = segment_coords
+
         corner[segment_expanded_coords[:, 0], segment_expanded_coords[:, 1]] = fill_color
         # DEBUG: Verify what was written
         sample_pixel = corner[segment_coords[0, 0], segment_coords[0, 1]]
