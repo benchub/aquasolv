@@ -215,18 +215,16 @@ def segmented_inpaint_watermark(img_array, template_mask):
     # Include more edge pixels by lowering threshold from 0.01 to 0.005
     edge_mask = (template_mask > 0.005) & (template_mask <= core_threshold)
 
-    # Filter out false positives: very bright pixels that shouldn't be modified
-    # The watermark is on a dark blue background, so pixels with brightness > 240
-    # are likely part of the border frame, not actual watermark content
-    pixel_brightness = np.min(corner, axis=2)  # Minimum channel value
-    is_very_bright = pixel_brightness >= 240
-    false_positive_mask = core_mask & is_very_bright
-
-    # Remove false positives from core mask
-    original_core_count = np.sum(core_mask)
-    core_mask = core_mask & ~false_positive_mask
-    if np.sum(false_positive_mask) > 0:
-        print(f"  Filtered out {np.sum(false_positive_mask)} false positive bright pixels from core mask")
+    # DISABLED: False positive filtering was removing legitimate white watermark segments
+    # visualize_segments.py doesn't do this filtering, and the segmentation algorithm
+    # handles white segments correctly by detecting them as separate color segments
+    # pixel_brightness = np.min(corner, axis=2)  # Minimum channel value
+    # is_very_bright = pixel_brightness >= 240
+    # false_positive_mask = core_mask & is_very_bright
+    # original_core_count = np.sum(core_mask)
+    # core_mask = core_mask & ~false_positive_mask
+    # if np.sum(false_positive_mask) > 0:
+    #     print(f"  Filtered out {np.sum(false_positive_mask)} false positive bright pixels from core mask")
 
     watermark_coords = np.argwhere(core_mask)
     watermark_colors = corner[core_mask]
