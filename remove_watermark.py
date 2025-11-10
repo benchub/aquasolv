@@ -18,6 +18,7 @@ import argparse
 from scipy import ndimage
 import os
 import cv2
+from segmentation import find_segments
 
 
 def assess_removal_quality(cleaned_corner, mask_corner):
@@ -136,7 +137,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
     Returns:
         Inpainted image array
     """
-    from scipy.ndimage import label, binary_dilation
+    from scipy.ndimage import label, binary_dilation, binary_erosion
     from skimage.segmentation import felzenszwalb
 
     height, width = img_array.shape[:2]
@@ -159,153 +160,18 @@ def segmented_inpaint_watermark(img_array, template_mask):
     sharpened = corner_float + 0.5 * (corner_float - blurred)  # Unsharp mask
     corner = np.clip(sharpened, 0, 255).astype(np.uint8)
 
-    # Step 1: Find distinct uniform color regions within the watermark
-    # Separate core watermark pixels (strong alpha) from anti-aliased edges (weak alpha)
+    # Step 1: Find distinct uniform color regions within the watermark using shared segmentation logic
     # Lowered from 0.15 to 0.05 to capture more anti-aliased halo pixels in segments
-    core_threshold = 0.05  # Pixels with alpha > 0.05 are considered core watermark
-    core_mask = template_mask > core_threshold
-    # Include more edge pixels by lowering threshold from 0.01 to 0.005
-    edge_mask = (template_mask > 0.005) & (template_mask <= core_threshold)
+    core_threshold = 0.05
+    seg_result = find_segments(corner, template_mask, quantization=40, core_threshold=core_threshold)
+    segments = seg_result['segments']
+    segment_info = seg_result['segment_info']
+    core_mask = seg_result['core_mask']
+    edge_mask = seg_result['edge_mask']
 
-    watermark_coords = np.argwhere(core_mask)
-    watermark_colors = corner[core_mask]
+    unique_segments = [info['id'] for info in segment_info]
 
     print(f"  Core watermark pixels: {np.sum(core_mask)}, edge pixels: {np.sum(edge_mask)}")
-
-    # Quantize colors to find uniform regions
-    # Round each color channel to group similar colors together
-    # Using 40 to match visualize_segments.py (groups RGB 120-159 together)
-    # This prevents sharpening artifacts from creating separate segments
-    quantized_colors = (watermark_colors // 40) * 40
-
-    # Create a color map
-    color_map = np.zeros((100, 100, 3), dtype=int)
-    for i, (y, x) in enumerate(watermark_coords):
-        color_map[y, x] = quantized_colors[i]
-
-    # Find connected components for each unique color
-    unique_colors = np.unique(quantized_colors.reshape(-1, 3), axis=0)
-
-    segments = np.zeros((100, 100), dtype=int) - 1
-    segment_id = 0
-
-    from scipy.ndimage import label as connected_components_label, binary_erosion
-
-    for color in unique_colors:
-        # Find pixels of this color in the core region
-        color_mask = np.all(color_map == color, axis=2) & core_mask
-
-        if np.sum(color_mask) < 3:  # Skip very small regions
-            continue
-
-        # Find connected components of this color (8-connectivity includes diagonals)
-        structure = np.ones((3, 3), dtype=int)  # 8-connectivity
-        labeled, num_features = connected_components_label(color_mask, structure=structure)
-
-        for component_id in range(1, num_features + 1):
-            component_mask = (labeled == component_id)
-            if np.sum(component_mask) >= 3:  # At least 3 pixels
-                segments[component_mask] = segment_id
-                segment_id += 1
-
-    unique_segments = np.unique(segments[segments >= 0])
-
-    print(f"  Found {len(unique_segments)} initial color segments")
-
-    # Merge adjacent segments with similar colors
-    # This handles gradient boundaries where quantization creates artificial splits
-    segment_colors = {}
-    for seg_id in unique_segments:
-        seg_mask = (segments == seg_id)
-        segment_colors[seg_id] = np.mean(corner[seg_mask], axis=0)
-
-    # Build adjacency graph
-    from scipy.ndimage import binary_dilation
-    adjacency = set()
-    for seg_id in unique_segments:
-        seg_mask = (segments == seg_id)
-        dilated = binary_dilation(seg_mask, iterations=1)
-        adjacent_region = dilated & ~seg_mask & (segments >= 0)
-        adjacent_segs = np.unique(segments[adjacent_region])
-        for adj_seg in adjacent_segs:
-            if adj_seg != seg_id:
-                adjacency.add((min(seg_id, adj_seg), max(seg_id, adj_seg)))
-
-    # Merge adjacent segments with similar colors (within 30 units per channel)
-    COLOR_SIMILARITY_THRESHOLD = 30
-    merge_map = {i: i for i in unique_segments}
-
-    def find_root(x):
-        if merge_map[x] != x:
-            merge_map[x] = find_root(merge_map[x])
-        return merge_map[x]
-
-    for seg1, seg2 in adjacency:
-        color1 = segment_colors[seg1]
-        color2 = segment_colors[seg2]
-        if np.max(np.abs(color1 - color2)) <= COLOR_SIMILARITY_THRESHOLD:
-            # Merge seg2 into seg1's root
-            root1 = find_root(seg1)
-            root2 = find_root(seg2)
-            if root1 != root2:
-                merge_map[root2] = root1
-
-    # Apply merges
-    for seg_id in unique_segments:
-        root = find_root(seg_id)
-        if root != seg_id:
-            segments[segments == seg_id] = root
-
-    unique_segments = np.unique(segments[segments >= 0])
-    print(f"  After merging similar adjacent segments: {len(unique_segments)} segments")
-
-    # Merge small interior segments into their largest neighbor
-    # Small segments that don't touch the boundary are likely gradient artifacts
-    SMALL_SEGMENT_THRESHOLD = 10  # pixels
-
-    # Recompute segment info after first merge
-    segment_sizes = {}
-    for seg_id in unique_segments:
-        segment_sizes[seg_id] = np.sum(segments == seg_id)
-
-    # Find which segments touch the watermark boundary
-    # Use the full watermark mask to detect boundary
-    full_watermark_mask_for_boundary = template_mask > 0.01
-    dilated_watermark_for_boundary = binary_dilation(full_watermark_mask_for_boundary, iterations=1)
-    boundary_mask_check = dilated_watermark_for_boundary & ~full_watermark_mask_for_boundary
-
-    segments_touching_boundary = set()
-    for seg_id in unique_segments:
-        seg_mask = (segments == seg_id) & core_mask
-        # Check if any pixel in this segment is adjacent to boundary
-        seg_dilated = binary_dilation(seg_mask, iterations=1)
-        if np.any(seg_dilated & boundary_mask_check):
-            segments_touching_boundary.add(seg_id)
-
-    # Merge small interior segments into their largest neighbor
-    merged_count = 0
-    for seg_id in list(unique_segments):
-        if segment_sizes[seg_id] <= SMALL_SEGMENT_THRESHOLD and seg_id not in segments_touching_boundary:
-            # This is a small interior segment - merge into largest neighbor
-            seg_mask = (segments == seg_id)
-            dilated = binary_dilation(seg_mask, iterations=1)
-            adjacent_region = dilated & ~seg_mask & (segments >= 0)
-            adjacent_segs = np.unique(segments[adjacent_region])
-
-            if len(adjacent_segs) > 0:
-                # Find largest adjacent segment
-                largest_neighbor = max(adjacent_segs, key=lambda s: segment_sizes.get(s, 0))
-                old_size = segment_sizes[seg_id]
-                segments[seg_mask] = largest_neighbor
-                segment_sizes[largest_neighbor] += segment_sizes[seg_id]
-                merged_count += 1
-                print(f"    Merged small interior segment {seg_id} ({old_size}px) into segment {largest_neighbor}")
-
-    unique_segments = np.unique(segments[segments >= 0])
-    if merged_count > 0:
-        print(f"  After merging {merged_count} small interior segments: {len(unique_segments)} segments")
-    else:
-        print(f"  No small interior segments to merge (still {len(unique_segments)} segments)")
 
     # Find the overall watermark boundary (pixels just outside the ENTIRE watermark, including edges)
     # Use adaptive dilation: if initial boundary is mostly bright/white, dilate more to get past white frames
