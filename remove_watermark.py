@@ -496,15 +496,15 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
                 fill_color = np.median(watermark_boundary_colors, axis=0)
 
-        # Special handling for small segments (<= 20 pixels)
-        # They often sample from bright borders/frames and get wrong colors
-        # For these, use background reference if sampled color is too bright
-        if len(segment_coords) <= 20:
-            fill_brightness = np.mean(fill_color)
-            bg_brightness = np.mean(background_reference)
-            if fill_brightness > bg_brightness + 100:
-                print(f"    Warning: Small segment {segment_id} ({len(segment_coords)}px) got bright fill (brightness={fill_brightness:.0f}), using background reference instead")
-                fill_color = background_reference
+        # DISABLED: This "small segment bright fill" logic doesn't exist in visualize_segments.py
+        # It was causing discrepancies where small white segments were incorrectly replaced
+        # with dark background colors, making white areas appear thicker than they should be
+        # if len(segment_coords) <= 20:
+        #     fill_brightness = np.mean(fill_color)
+        #     bg_brightness = np.mean(background_reference)
+        #     if fill_brightness > bg_brightness + 100:
+        #         print(f"    Warning: Small segment {segment_id} ({len(segment_coords)}px) got bright fill (brightness={fill_brightness:.0f}), using background reference instead")
+        #         fill_color = background_reference
 
         # Expand the segment by 2 pixels to cover anti-aliased halo
         segment_expanded = binary_dilation(segment_mask, iterations=2)
