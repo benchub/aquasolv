@@ -83,7 +83,47 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     
     print(f'Found {len(segment_info)} initial segments')
 
-    # Merge adjacent segments with similar colors
+    # First pass: Merge segments with identical quantized colors (even if not adjacent)
+    # This handles cases where the same color appears in multiple disconnected regions
+    segment_colors = {info['id']: info['color'] for info in segment_info}
+    color_to_segments = {}
+    for seg_id, color in segment_colors.items():
+        color_key = tuple(color)
+        if color_key not in color_to_segments:
+            color_to_segments[color_key] = []
+        color_to_segments[color_key].append(seg_id)
+
+    # Merge segments with identical colors
+    identical_color_merges = 0
+    for color_key, seg_ids in color_to_segments.items():
+        if len(seg_ids) > 1:
+            # Merge all segments with this color into the first one
+            root_seg = seg_ids[0]
+            for seg_id in seg_ids[1:]:
+                segments[segments == seg_id] = root_seg
+                identical_color_merges += 1
+
+    # Rebuild segment_info after identical color merges
+    if identical_color_merges > 0:
+        new_segment_info = []
+        for info in segment_info:
+            seg_id = info['id']
+            # Check if this segment still exists or was merged
+            if seg_id in color_to_segments[tuple(info['color'])]:
+                if color_to_segments[tuple(info['color'])][0] == seg_id:
+                    # This is the root segment for this color
+                    merged_mask = (segments == seg_id)
+                    new_segment_info.append({
+                        'id': seg_id,
+                        'size': np.sum(merged_mask),
+                        'mask': merged_mask,
+                        'centroid': np.mean(np.argwhere(merged_mask), axis=0),
+                        'color': info['color']
+                    })
+        segment_info = new_segment_info
+        print(f'After merging {identical_color_merges} segments with identical colors: {len(segment_info)} segments')
+
+    # Second pass: Merge adjacent segments with similar colors
     segment_colors = {info['id']: info['color'] for info in segment_info}
 
     # Build adjacency graph
