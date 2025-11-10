@@ -298,11 +298,37 @@ def segmented_inpaint_watermark(img_array, template_mask):
             sample_colors = boundary_colors[sample_indices]
 
             if len(sample_colors) > 0:
+                # Filter outliers by keeping only samples close to the majority cluster
+                if len(sample_colors) >= 4:
+                    luminance = np.mean(sample_colors, axis=1)
+
+                    # Find the largest cluster by looking for the mode region
+                    # Sort luminance and find gaps larger than 50
+                    sorted_lum = np.sort(luminance)
+                    gaps = np.diff(sorted_lum)
+
+                    if len(gaps) > 0 and np.max(gaps) > 50:  # If there's a significant gap (>50)
+                        # Find the first large gap (>50) and keep samples before it
+                        # This preferentially keeps the darkest cluster for dark segments
+                        large_gap_idx = np.where(gaps > 50)[0][0] + 1
+                        cluster = sorted_lum[:large_gap_idx]
+
+                        selected_cluster_mean = np.mean(cluster)
+                        threshold = np.std(cluster) * 2 if len(cluster) > 1 else 20
+                        mask = np.abs(luminance - selected_cluster_mean) <= threshold
+                    else:
+                        # No significant gap, use MAD on all samples
+                        median_lum = np.median(luminance)
+                        mad = np.median(np.abs(luminance - median_lum))
+                        threshold = 1.5 * mad if mad > 0 else 50
+                        mask = np.abs(luminance - median_lum) <= threshold
+
+                    filtered_colors = sample_colors[mask]
+                    if len(filtered_colors) > 0:
+                        sample_colors = filtered_colors
+
                 fill_color = np.median(sample_colors, axis=0)
                 print(f"    Segment {segment_id} touches boundary at {np.sum(boundary_contact)} points, sampled from {len(sample_colors)} closest pixels to centroid")
-                print(f"    DEBUG: Sampled colors: {sample_colors.tolist()}")
-                print(f"    DEBUG: Calculated fill_color = RGB{tuple(fill_color.astype(int))} = #{int(fill_color[0]):02x}{int(fill_color[1]):02x}{int(fill_color[2]):02x}")
-                print(f"    DEBUG: About to fill {len(segment_coords)} pixels with this color")
             else:
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
                 fill_color = np.median(watermark_boundary_colors, axis=0)
