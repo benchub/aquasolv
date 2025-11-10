@@ -10,16 +10,17 @@ import numpy as np
 from scipy.ndimage import label as connected_components_label, binary_dilation
 
 
-def find_segments(corner, template, quantization=50, core_threshold=0.15):
+def find_segments(corner, template, quantization=None, core_threshold=0.15):
     """
     Find color segments in the watermark region.
-    
+
     Args:
         corner: 100x100x3 RGB image array (corner of the image)
         template: 100x100 alpha mask (watermark template)
-        quantization: Color quantization step size (default: 40)
+        quantization: Color quantization step size. If None, automatically determined
+                     based on color variance (default: None)
         core_threshold: Alpha threshold for core watermark pixels (default: 0.15)
-    
+
     Returns:
         dict with:
             - segments: 100x100 array with segment IDs (-1 for non-watermark)
@@ -29,7 +30,25 @@ def find_segments(corner, template, quantization=50, core_threshold=0.15):
     """
     core_mask = template > core_threshold
     edge_mask = (template > 0.005) & (template <= core_threshold)
-    
+
+    # Auto-determine quantization based on color variance if not specified
+    if quantization is None:
+        watermark_colors = corner[core_mask]
+        if len(watermark_colors) > 0:
+            # Calculate variance in RGB values
+            color_std = np.std(watermark_colors, axis=0).mean()
+            # For high variance (diverse colors), use coarser quantization
+            # For low variance (similar colors), use finer quantization
+            if color_std > 40:
+                quantization = 30  # Coarse for diverse colors
+            elif color_std > 20:
+                quantization = 20  # Medium
+            else:
+                quantization = 15  # Fine for very similar colors
+            print(f'Auto-selected quantization: {quantization} (color_std={color_std:.2f})')
+        else:
+            quantization = 20  # Fallback
+
     # Quantize colors
     color_map = (corner // quantization) * quantization
     unique_colors = np.unique(color_map[core_mask].reshape(-1, 3), axis=0)
@@ -63,10 +82,10 @@ def find_segments(corner, template, quantization=50, core_threshold=0.15):
                 segment_id += 1
     
     print(f'Found {len(segment_info)} initial segments')
-    
+
     # Merge adjacent segments with similar colors
     segment_colors = {info['id']: info['color'] for info in segment_info}
-    
+
     # Build adjacency graph
     adjacency = set()
     for info in segment_info:
@@ -78,20 +97,21 @@ def find_segments(corner, template, quantization=50, core_threshold=0.15):
         for adj_seg in adjacent_segs:
             if adj_seg != seg_id:
                 adjacency.add((min(seg_id, adj_seg), max(seg_id, adj_seg)))
-    
+
     # Merge adjacent segments with similar colors (within 50 units per channel after quantization)
     COLOR_SIMILARITY_THRESHOLD = 50
     merge_map = {info['id']: info['id'] for info in segment_info}
-    
+
     def find_root(x):
         if merge_map[x] != x:
             merge_map[x] = find_root(merge_map[x])
         return merge_map[x]
-    
+
     for seg1, seg2 in adjacency:
-        color1 = np.array(segment_colors[seg1])
-        color2 = np.array(segment_colors[seg2])
-        if np.max(np.abs(color1 - color2)) <= COLOR_SIMILARITY_THRESHOLD:
+        color1 = np.array(segment_colors[seg1], dtype=np.int32)
+        color2 = np.array(segment_colors[seg2], dtype=np.int32)
+        color_diff = np.max(np.abs(color1 - color2))
+        if color_diff <= COLOR_SIMILARITY_THRESHOLD:
             root1 = find_root(seg1)
             root2 = find_root(seg2)
             if root1 != root2:
