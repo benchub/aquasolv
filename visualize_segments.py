@@ -266,12 +266,27 @@ def distribute_labels(segments, side):
             label_x = image_size + margin + 50
             text_align_x = label_x
 
-        # Draw line from label to segment centroid
-        draw.line([(label_x, label_y), (cx_scaled, cy_scaled)], fill=(0, 0, 0), width=3)
+        # Find connected components within this segment
+        from scipy.ndimage import label as connected_components_label
+        structure = np.ones((3, 3), dtype=int)
+        labeled, num_components = connected_components_label(info['mask'], structure=structure)
 
-        # Draw circle at centroid
-        r = 8
-        draw.ellipse([(cx_scaled-r, cy_scaled-r), (cx_scaled+r, cy_scaled+r)], fill=(0, 0, 0))
+        # Draw line and circle to each component's centroid
+        for comp_id in range(1, num_components + 1):
+            component_mask = (labeled == comp_id)
+            comp_centroid = np.mean(np.argwhere(component_mask), axis=0)
+            comp_cy, comp_cx = comp_centroid
+
+            # Position on scaled image (with margin offset)
+            comp_cy_scaled = int(comp_cy * scale_factor) + margin
+            comp_cx_scaled = int(comp_cx * scale_factor) + margin
+
+            # Draw line from label to component centroid
+            draw.line([(label_x, label_y), (comp_cx_scaled, comp_cy_scaled)], fill=(0, 0, 0), width=3)
+
+            # Draw circle at component centroid
+            r = 8
+            draw.ellipse([(comp_cx_scaled-r, comp_cy_scaled-r), (comp_cx_scaled+r, comp_cy_scaled+r)], fill=(0, 0, 0))
 
         # Draw label with background and fill color
         fill_info = segment_fill_info.get(seg_id, {})
