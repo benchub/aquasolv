@@ -261,7 +261,35 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 contact_points = segment_dilated & ~core_mask
                 if np.any(contact_points):
                     # These are the points just outside watermark where segment reaches
-                    segment_boundary_colors = corner[contact_points]
+                    segment_boundary_colors = corner_original[contact_points]  # Use original, not processed
+
+                    # Apply outlier filtering for interior segments too
+                    if len(segment_boundary_colors) >= 4:
+                        luminance = np.mean(segment_boundary_colors, axis=1)
+                        sorted_lum = np.sort(luminance)
+                        gaps = np.diff(sorted_lum)
+
+                        if len(gaps) > 0 and np.max(gaps) > 50:
+                            # Split into clusters and keep the larger one
+                            large_gap_idx = np.where(gaps > 50)[0][0] + 1
+                            cluster1 = sorted_lum[:large_gap_idx]
+                            cluster2 = sorted_lum[large_gap_idx:]
+                            cluster = cluster1 if len(cluster1) >= len(cluster2) else cluster2
+
+                            selected_cluster_mean = np.mean(cluster)
+                            threshold = np.std(cluster) * 2 if len(cluster) > 1 else 20
+                            mask = np.abs(luminance - selected_cluster_mean) <= threshold
+                        else:
+                            # No significant gap, use MAD
+                            median_lum = np.median(luminance)
+                            mad = np.median(np.abs(luminance - median_lum))
+                            threshold = 1.5 * mad if mad > 0 else 50
+                            mask = np.abs(luminance - median_lum) <= threshold
+
+                        filtered_colors = segment_boundary_colors[mask]
+                        if len(filtered_colors) > 0:
+                            segment_boundary_colors = filtered_colors
+
                     fill_color = np.median(segment_boundary_colors, axis=0)
                     print(f"    Segment {segment_id} reaches boundary at {np.sum(contact_points)} points (dilation={dilation_iter}), fill color: RGB{tuple(fill_color.astype(int))}")
                     break
@@ -308,10 +336,16 @@ def segmented_inpaint_watermark(img_array, template_mask):
                     gaps = np.diff(sorted_lum)
 
                     if len(gaps) > 0 and np.max(gaps) > 50:  # If there's a significant gap (>50)
-                        # Find the first large gap (>50) and keep samples before it
-                        # This preferentially keeps the darkest cluster for dark segments
+                        # Find the first large gap (>50) and split into two clusters
                         large_gap_idx = np.where(gaps > 50)[0][0] + 1
-                        cluster = sorted_lum[:large_gap_idx]
+                        cluster1 = sorted_lum[:large_gap_idx]
+                        cluster2 = sorted_lum[large_gap_idx:]
+
+                        # Keep the larger cluster (more samples = more reliable)
+                        if len(cluster1) >= len(cluster2):
+                            cluster = cluster1
+                        else:
+                            cluster = cluster2
 
                         selected_cluster_mean = np.mean(cluster)
                         threshold = np.std(cluster) * 2 if len(cluster) > 1 else 20
