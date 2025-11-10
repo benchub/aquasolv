@@ -350,6 +350,9 @@ def segmented_inpaint_watermark(img_array, template_mask):
     # Find where the watermark core ends (not the dilated boundary, but the actual watermark pixels)
     watermark_core_edge = core_mask & ~binary_dilation(~core_mask, iterations=1)
 
+    # Track which pixels have been filled by segments to prevent overlap
+    filled_pixels = np.zeros(corner.shape[:2], dtype=bool)
+
     for segment_id in unique_segments:
         # Get pixels in this segment
         segment_mask = (segments == segment_id)
@@ -448,12 +451,18 @@ def segmented_inpaint_watermark(img_array, template_mask):
             expansion_iterations = 2
 
         if expansion_iterations > 0:
+            # Expand segment but constrain to watermark region only (don't expand into other segments)
+            watermark_mask = core_mask | edge_mask
             segment_expanded = binary_dilation(segment_mask, iterations=expansion_iterations)
+            # Only keep expanded pixels that are: (1) within watermark mask, (2) not already filled
+            segment_expanded = segment_expanded & watermark_mask & ~filled_pixels
             segment_expanded_coords = np.argwhere(segment_expanded)
         else:
             segment_expanded_coords = segment_coords
 
         corner[segment_expanded_coords[:, 0], segment_expanded_coords[:, 1]] = fill_color
+        # Mark these pixels as filled
+        filled_pixels[segment_expanded_coords[:, 0], segment_expanded_coords[:, 1]] = True
         # DEBUG: Verify what was written
         sample_pixel = corner[segment_coords[0, 0], segment_coords[0, 1]]
         print(f"    DEBUG: After filling {len(segment_expanded_coords)} pixels (expanded from {len(segment_coords)}), pixel at {tuple(segment_coords[0])} = RGB{tuple(sample_pixel)} = #{sample_pixel[0]:02x}{sample_pixel[1]:02x}{sample_pixel[2]:02x}")
