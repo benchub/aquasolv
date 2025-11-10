@@ -366,9 +366,15 @@ def segmented_inpaint_watermark(img_array, template_mask):
             # Expand segment but constrain to watermark region only (don't expand into other segments)
             watermark_mask = core_mask | edge_mask
             segment_expanded = binary_dilation(segment_mask, iterations=expansion_iterations)
-            # Only keep NEWLY expanded pixels that are: (1) within watermark mask, (2) not already filled
+            # Only keep NEWLY expanded pixels that are:
+            # (1) within watermark mask
+            # (2) not already filled by another segment
+            # (3) don't belong to a different segment (check segments array)
             # But ALWAYS include the segment's own core pixels (segment_mask)
             newly_expanded = segment_expanded & ~segment_mask & watermark_mask & ~filled_pixels
+            # CRITICAL: Also exclude pixels that belong to other segments
+            # This prevents expansion from bleeding across segment boundaries
+            newly_expanded = newly_expanded & ((segments == segment_id) | (segments == -1))
             segment_to_fill = segment_mask | newly_expanded
             segment_expanded_coords = np.argwhere(segment_to_fill)
         else:
