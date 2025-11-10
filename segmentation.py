@@ -10,7 +10,7 @@ import numpy as np
 from scipy.ndimage import label as connected_components_label, binary_dilation
 
 
-def find_segments(corner, template, quantization=40, core_threshold=0.15):
+def find_segments(corner, template, quantization=50, core_threshold=0.15):
     """
     Find color segments in the watermark region.
     
@@ -79,8 +79,8 @@ def find_segments(corner, template, quantization=40, core_threshold=0.15):
             if adj_seg != seg_id:
                 adjacency.add((min(seg_id, adj_seg), max(seg_id, adj_seg)))
     
-    # Merge adjacent segments with similar colors (within 30 units per channel)
-    COLOR_SIMILARITY_THRESHOLD = 30
+    # Merge adjacent segments with similar colors (within 50 units per channel after quantization)
+    COLOR_SIMILARITY_THRESHOLD = 50
     merge_map = {info['id']: info['id'] for info in segment_info}
     
     def find_root(x):
