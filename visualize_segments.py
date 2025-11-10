@@ -95,7 +95,8 @@ for info in segment_info:
     seg_mask = info['mask']
 
     # Check if segment touches boundary
-    seg_dilated = binary_dilation(seg_mask, iterations=1)
+    # Dilate more to reach further boundary pixels for better sampling
+    seg_dilated = binary_dilation(seg_mask, iterations=3)
     boundary_contact = seg_dilated & watermark_boundary
 
     if np.sum(boundary_contact) > 0:
@@ -103,15 +104,35 @@ for info in segment_info:
         boundary_coords = np.argwhere(boundary_contact)
         boundary_colors = corner[boundary_contact]
 
-        # Find center pixels for better sampling
+        # Use farthest-point sampling for better boundary coverage
+        # Start with the point closest to segment centroid
         centroid_y, centroid_x = info['centroid']
-        distances = np.sqrt((boundary_coords[:, 0] - centroid_y)**2 +
-                          (boundary_coords[:, 1] - centroid_x)**2)
-        sorted_indices = np.argsort(distances)
+        distances_to_centroid = np.sqrt((boundary_coords[:, 0] - centroid_y)**2 +
+                                        (boundary_coords[:, 1] - centroid_x)**2)
 
-        # Sample from closest boundary pixels
-        num_samples = min(12, len(sorted_indices))
-        sample_indices = sorted_indices[:num_samples]
+        num_samples = min(12, len(boundary_coords))
+        sample_indices = []
+
+        # First sample: closest to centroid
+        first_idx = np.argmin(distances_to_centroid)
+        sample_indices.append(first_idx)
+
+        # Subsequent samples: farthest from already-selected samples
+        for _ in range(num_samples - 1):
+            # For each candidate point, find distance to nearest selected sample
+            min_distances = np.full(len(boundary_coords), np.inf)
+            for selected_idx in sample_indices:
+                selected_coord = boundary_coords[selected_idx]
+                distances = np.sqrt((boundary_coords[:, 0] - selected_coord[0])**2 +
+                                   (boundary_coords[:, 1] - selected_coord[1])**2)
+                min_distances = np.minimum(min_distances, distances)
+
+            # Select the point that is farthest from any selected sample
+            # (but don't select already-selected points)
+            min_distances[sample_indices] = -1
+            next_idx = np.argmax(min_distances)
+            sample_indices.append(next_idx)
+
         sample_coords = boundary_coords[sample_indices]
         sample_colors = boundary_colors[sample_indices]
 
