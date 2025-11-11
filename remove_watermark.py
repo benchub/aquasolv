@@ -21,6 +21,86 @@ import cv2
 from segmentation import find_segments
 
 
+def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contention, segment_id):
+    """
+    Apply contention-aware outlier filtering to boundary samples.
+
+    When there's a large luminance gap, use contention information to decide which
+    cluster to keep. Less contested pixels are more reliable (closer to the segment).
+
+    Args:
+        boundary_colors: Array of RGB colors sampled from boundary (N, 3)
+        boundary_contention: Array of contention counts for each sample (N,)
+        segment_id: ID of the segment (for debug output)
+
+    Returns:
+        Tuple of (filtered_colors, filtered_contention, mask) or
+        (boundary_colors, boundary_contention, None) if no filtering needed
+    """
+    luminances = np.mean(boundary_colors, axis=1)
+    lum_25 = np.percentile(luminances, 25)
+    lum_75 = np.percentile(luminances, 75)
+    iqr = lum_75 - lum_25
+
+    if iqr > 90:
+        sorted_lums = np.sort(luminances)
+        gaps = np.diff(sorted_lums)
+        max_gap = np.max(gaps) if len(gaps) > 0 else 0
+
+        if max_gap > 75:
+            gap_idx = np.argmax(gaps)
+            threshold = (sorted_lums[gap_idx] + sorted_lums[gap_idx + 1]) / 2
+
+            bright_mask = luminances > threshold
+            dark_mask = ~bright_mask
+
+            # Use contention to decide which cluster to keep
+            bright_contention = np.mean(boundary_contention[bright_mask]) if np.sum(bright_mask) > 0 else float('inf')
+            dark_contention = np.mean(boundary_contention[dark_mask]) if np.sum(dark_mask) > 0 else float('inf')
+
+            if dark_contention < bright_contention * 0.8:
+                # Dark cluster is significantly less contested
+                print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (less contested dark cluster, gap={max_gap:.0f})")
+                return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
+            elif bright_contention < dark_contention * 0.8:
+                # Bright cluster is significantly less contested
+                print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (less contested bright cluster, gap={max_gap:.0f})")
+                return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
+            elif np.sum(bright_mask) > np.sum(dark_mask):
+                # No clear winner by contention, keep larger cluster
+                print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (larger bright cluster, gap={max_gap:.0f})")
+                return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
+            else:
+                print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (larger dark cluster, gap={max_gap:.0f})")
+                return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
+
+    return boundary_colors, boundary_contention, None
+
+
+def compute_weighted_median(colors, weights):
+    """
+    Compute weighted median for each color channel.
+
+    Args:
+        colors: Array of RGB colors (N, 3)
+        weights: Array of weights for each color (N,)
+
+    Returns:
+        Array of weighted median RGB values (3,)
+    """
+    weighted_fill = np.zeros(3)
+    for c in range(3):
+        channel_values = colors[:, c]
+        sorted_idx = np.argsort(channel_values)
+        sorted_values = channel_values[sorted_idx]
+        sorted_weights = weights[sorted_idx]
+        cum_weights = np.cumsum(sorted_weights)
+        total_weight = cum_weights[-1]
+        median_idx = np.searchsorted(cum_weights, total_weight / 2)
+        weighted_fill[c] = sorted_values[median_idx]
+    return weighted_fill.astype(int)
+
+
 def assess_removal_quality(cleaned_corner, mask_corner):
     """
     Assess the quality of watermark removal in the corner region.
@@ -351,78 +431,14 @@ def segmented_inpaint_watermark(img_array, template_mask):
             boundary_contention = boundary_segment_count[boundary_contact]
 
             if len(boundary_colors) > 0:
-                # Filter outliers before computing median
-                # Check if there's a large luminance gap suggesting multiple distinct regions
-                luminances = np.mean(boundary_colors, axis=1)
-                lum_25 = np.percentile(luminances, 25)
-                lum_75 = np.percentile(luminances, 75)
-                iqr = lum_75 - lum_25
+                # Apply contention-aware outlier filtering
+                boundary_colors, boundary_contention, _ = apply_contention_aware_outlier_filtering(
+                    boundary_colors, boundary_contention, segment_id
+                )
 
-                # If the IQR (interquartile range) is very large, we have outliers
-                # Filter if there's a huge luminance gap (suggests sampling across very different regions)
-                if iqr > 90:
-                    # Check if there's a large gap in the luminance distribution
-                    sorted_lums = np.sort(luminances)
-                    gaps = np.diff(sorted_lums)
-                    max_gap = np.max(gaps) if len(gaps) > 0 else 0
-
-                    # If there's a very large gap (>75), split at the gap
-                    if max_gap > 75:
-                        gap_idx = np.argmax(gaps)
-                        threshold = (sorted_lums[gap_idx] + sorted_lums[gap_idx + 1]) / 2
-
-                        bright_mask = luminances > threshold
-                        dark_mask = ~bright_mask
-
-                        # Decide which cluster to keep based on contention
-                        # Less contested pixels are more reliable (closer to this segment)
-                        bright_contention = np.mean(boundary_contention[bright_mask]) if np.sum(bright_mask) > 0 else float('inf')
-                        dark_contention = np.mean(boundary_contention[dark_mask]) if np.sum(dark_mask) > 0 else float('inf')
-
-                        # If one cluster is significantly less contested, prefer it
-                        # Otherwise fall back to keeping the larger cluster
-                        if dark_contention < bright_contention * 0.8:
-                            # Dark cluster is significantly less contested
-                            boundary_colors = boundary_colors[dark_mask]
-                            boundary_contention = boundary_contention[dark_mask]
-                            print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (less contested dark cluster, gap={max_gap:.0f})")
-                        elif bright_contention < dark_contention * 0.8:
-                            # Bright cluster is significantly less contested
-                            boundary_colors = boundary_colors[bright_mask]
-                            boundary_contention = boundary_contention[bright_mask]
-                            print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (less contested bright cluster, gap={max_gap:.0f})")
-                        elif np.sum(bright_mask) > np.sum(dark_mask):
-                            # No clear winner by contention, keep larger cluster
-                            boundary_colors = boundary_colors[bright_mask]
-                            boundary_contention = boundary_contention[bright_mask]
-                            print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (larger bright cluster, gap={max_gap:.0f})")
-                        else:
-                            boundary_colors = boundary_colors[dark_mask]
-                            boundary_contention = boundary_contention[dark_mask]
-                            print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (larger dark cluster, gap={max_gap:.0f})")
-                    # else: no huge gap, both clusters blend together - use all pixels
-
-                # Use weighted median where contested pixels get less weight
-                # Contested pixels (reachable by multiple segments) are less reliable
+                # Compute weighted median
                 weights = 1.0 / boundary_contention  # Inverse of contention count
-
-                # Compute weighted percentiles for each color channel
-                weighted_fill = np.zeros(3)
-                for c in range(3):
-                    channel_values = boundary_colors[:, c]
-                    sorted_idx = np.argsort(channel_values)
-                    sorted_values = channel_values[sorted_idx]
-                    sorted_weights = weights[sorted_idx]
-
-                    # Cumulative weight
-                    cum_weights = np.cumsum(sorted_weights)
-                    total_weight = cum_weights[-1]
-
-                    # Find value at 50th percentile (weighted median)
-                    median_idx = np.searchsorted(cum_weights, total_weight / 2)
-                    weighted_fill[c] = sorted_values[median_idx]
-
-                fill_color = weighted_fill.astype(int)
+                fill_color = compute_weighted_median(boundary_colors, weights)
 
                 contested_count = np.sum(boundary_contention > 1)
                 if contested_count > 0:
@@ -1477,63 +1493,7 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         if has_border_frames:
             print(f"Border correction enabled (very_dark={np.sum(very_dark)}, very_bright={np.sum(very_bright)})")
 
-            # STRATEGY 1: Template-based shape-aware replacement (DISABLED - causes regressions)
-            # This approach replaces pixels but often makes things worse by overriding
-            # successful watermark removal. Keep disabled for now.
-            watermark_template = get_watermark_template()
-            if False and watermark_template is not None:
-                template_mask = watermark_template > 0.01
-                print(f"Using watermark template for shape-aware replacement")
-
-                # For each pixel in the watermark shape, check if it needs replacement
-                # Only replace pixels that look wrong (different from expected border color)
-                pixels_replaced = 0
-                for y in range(corner_size):
-                    for x in range(corner_size):
-                        if template_mask[y, x]:
-                            current_pixel = corner_cleaned[y, x]
-
-                            # Find nearest non-watermark pixels to determine expected color
-                            row_sample = None
-                            for dx in range(1, 20):  # Search further for better samples
-                                if x - dx >= 0 and not template_mask[y, x - dx]:
-                                    row_sample = corner_cleaned[y, x - dx]
-                                    break
-                                if x + dx < corner_size and not template_mask[y, x + dx]:
-                                    row_sample = corner_cleaned[y, x + dx]
-                                    break
-
-                            col_sample = None
-                            for dy in range(1, 20):
-                                if y - dy >= 0 and not template_mask[y - dy, x]:
-                                    col_sample = corner_cleaned[y - dy, x]
-                                    break
-                                if y + dy < corner_size and not template_mask[y + dy, x]:
-                                    col_sample = corner_cleaned[y + dy, x]
-                                    break
-
-                            # Determine expected color (prefer row for horizontal borders)
-                            expected_color = row_sample if row_sample is not None else col_sample
-
-                            if expected_color is not None:
-                                # Check if current pixel is significantly different from expected
-                                color_diff = np.abs(current_pixel.astype(float) - expected_color).max()
-
-                                # Only replace if pixel is significantly wrong (diff > 30)
-                                if color_diff > 30:
-                                    corner_cleaned[y, x] = expected_color
-                                    pixels_replaced += 1
-
-                if pixels_replaced > 0:
-                    print(f"Replaced {pixels_replaced} watermark pixels with nearby border colors")
-                    # Update the main cleaned array
-                    cleaned[y_start:, x_start:] = corner_cleaned
-                    has_border_frames = False  # Skip other correction strategies
-
-            else:
-                template_mask = None
-
-            # STRATEGY 2: Detect if background is uniform (single color or gradient)
+            # STRATEGY 1: Detect if background is uniform (single color or gradient)
             # If so, we can just redraw borders over the watermark area
             # Sample non-watermark areas to check uniformity
             non_watermark = corner_gray[~corner_mask]
@@ -1611,7 +1571,7 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
                         cleaned[y_start:, x_start:] = corner_cleaned
                         has_border_frames = False  # Skip traditional correction
 
-            # STRATEGY 3: Traditional border correction with intelligence
+            # STRATEGY 2: Traditional border correction with intelligence
             # Detect border pixels that may have been affected by watermark
             # These are pixels in the watermark region that should be part of the border
 
