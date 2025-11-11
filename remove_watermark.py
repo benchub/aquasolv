@@ -344,17 +344,18 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 luminances = np.mean(boundary_colors, axis=1)
                 lum_25 = np.percentile(luminances, 25)
                 lum_75 = np.percentile(luminances, 75)
+                iqr = lum_75 - lum_25
 
                 # If the IQR (interquartile range) is very large, we have outliers
                 # Filter if there's a huge luminance gap (suggests sampling across very different regions)
-                if lum_75 - lum_25 > 100:
+                if iqr > 90:
                     # Check if there's a large gap in the luminance distribution
                     sorted_lums = np.sort(luminances)
                     gaps = np.diff(sorted_lums)
                     max_gap = np.max(gaps) if len(gaps) > 0 else 0
 
-                    # If there's a very large gap (>80), split at the gap
-                    if max_gap > 80:
+                    # If there's a very large gap (>75), split at the gap
+                    if max_gap > 75:
                         gap_idx = np.argmax(gaps)
                         threshold = (sorted_lums[gap_idx] + sorted_lums[gap_idx + 1]) / 2
 
