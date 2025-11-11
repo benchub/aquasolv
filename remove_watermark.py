@@ -236,6 +236,15 @@ def segmented_inpaint_watermark(img_array, template_mask):
             nearest_idx = np.argmin(distances)
             segments[uy, ux] = assigned_ids[nearest_idx]
 
+    # Compute boundary pixel contention map
+    # Pixels reachable by multiple segments are less reliable for sampling
+    boundary_segment_count = np.zeros(corner.shape[:2], dtype=int)
+    for segment_id in unique_segments:
+        segment_mask = (segments == segment_id)
+        segment_dilated = binary_dilation(segment_mask, iterations=3)
+        segment_boundary_contact = segment_dilated & watermark_boundary
+        boundary_segment_count[segment_boundary_contact] += 1
+
     # Track which pixels have been filled by segments to prevent overlap
     filled_pixels = np.zeros(corner.shape[:2], dtype=bool)
 
@@ -338,6 +347,9 @@ def segmented_inpaint_watermark(img_array, template_mask):
             boundary_coords = np.argwhere(boundary_contact)
             boundary_colors = corner_original[boundary_contact]
 
+            # Get contention count for each boundary pixel this segment reaches
+            boundary_contention = boundary_segment_count[boundary_contact]
+
             if len(boundary_colors) > 0:
                 # Filter outliers before computing median
                 # Check if there's a large luminance gap suggesting multiple distinct regions
@@ -362,17 +374,61 @@ def segmented_inpaint_watermark(img_array, template_mask):
                         bright_mask = luminances > threshold
                         dark_mask = ~bright_mask
 
-                        # Keep the larger cluster
-                        if np.sum(bright_mask) > np.sum(dark_mask):
+                        # Decide which cluster to keep based on contention
+                        # Less contested pixels are more reliable (closer to this segment)
+                        bright_contention = np.mean(boundary_contention[bright_mask]) if np.sum(bright_mask) > 0 else float('inf')
+                        dark_contention = np.mean(boundary_contention[dark_mask]) if np.sum(dark_mask) > 0 else float('inf')
+
+                        # If one cluster is significantly less contested, prefer it
+                        # Otherwise fall back to keeping the larger cluster
+                        if dark_contention < bright_contention * 0.8:
+                            # Dark cluster is significantly less contested
+                            boundary_colors = boundary_colors[dark_mask]
+                            boundary_contention = boundary_contention[dark_mask]
+                            print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (less contested dark cluster, gap={max_gap:.0f})")
+                        elif bright_contention < dark_contention * 0.8:
+                            # Bright cluster is significantly less contested
                             boundary_colors = boundary_colors[bright_mask]
-                            print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (large gap={max_gap:.0f})")
+                            boundary_contention = boundary_contention[bright_mask]
+                            print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (less contested bright cluster, gap={max_gap:.0f})")
+                        elif np.sum(bright_mask) > np.sum(dark_mask):
+                            # No clear winner by contention, keep larger cluster
+                            boundary_colors = boundary_colors[bright_mask]
+                            boundary_contention = boundary_contention[bright_mask]
+                            print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (larger bright cluster, gap={max_gap:.0f})")
                         else:
                             boundary_colors = boundary_colors[dark_mask]
-                            print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (large gap={max_gap:.0f})")
+                            boundary_contention = boundary_contention[dark_mask]
+                            print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (larger dark cluster, gap={max_gap:.0f})")
                     # else: no huge gap, both clusters blend together - use all pixels
 
-                fill_color = np.median(boundary_colors, axis=0)
-                print(f"    Segment {segment_id} touches boundary, using median of {len(boundary_colors)} pixels → {fill_color.astype(int)}")
+                # Use weighted median where contested pixels get less weight
+                # Contested pixels (reachable by multiple segments) are less reliable
+                weights = 1.0 / boundary_contention  # Inverse of contention count
+
+                # Compute weighted percentiles for each color channel
+                weighted_fill = np.zeros(3)
+                for c in range(3):
+                    channel_values = boundary_colors[:, c]
+                    sorted_idx = np.argsort(channel_values)
+                    sorted_values = channel_values[sorted_idx]
+                    sorted_weights = weights[sorted_idx]
+
+                    # Cumulative weight
+                    cum_weights = np.cumsum(sorted_weights)
+                    total_weight = cum_weights[-1]
+
+                    # Find value at 50th percentile (weighted median)
+                    median_idx = np.searchsorted(cum_weights, total_weight / 2)
+                    weighted_fill[c] = sorted_values[median_idx]
+
+                fill_color = weighted_fill.astype(int)
+
+                contested_count = np.sum(boundary_contention > 1)
+                if contested_count > 0:
+                    print(f"    Segment {segment_id} touches boundary, using weighted median of {len(boundary_colors)} pixels ({contested_count} contested) → {fill_color}")
+                else:
+                    print(f"    Segment {segment_id} touches boundary, using median of {len(boundary_colors)} pixels → {fill_color}")
             else:
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
                 fill_color = np.median(watermark_boundary_colors, axis=0)
@@ -1570,10 +1626,10 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
                 edge_dark_blue = np.sum(row[:10] < 100) + np.sum(row[-10:] < 100)
                 edge_bright = np.sum(row[:10] > 230) + np.sum(row[-10:] > 230)
 
-                if edge_very_dark > 5 or edge_dark_blue > 10 or edge_bright > 5:
+                if edge_very_dark > 5 or edge_dark_blue >= 10 or edge_bright > 5:
                     # This row crosses a border - mark darker/brighter pixels for correction
                     # For dark blue borders, mark pixels brighter than they should be
-                    if edge_dark_blue > 10:
+                    if edge_dark_blue >= 10:
                         border_correction_mask[y, :] |= (row < 180) | (row > 200)
                     else:
                         border_correction_mask[y, :] |= (row < 150) | (row > 200)
@@ -1585,9 +1641,9 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
                 edge_dark_blue = np.sum(col[:10] < 100) + np.sum(col[-10:] < 100)
                 edge_bright = np.sum(col[:10] > 230) + np.sum(col[-10:] > 230)
 
-                if edge_very_dark > 5 or edge_dark_blue > 10 or edge_bright > 5:
+                if edge_very_dark > 5 or edge_dark_blue >= 10 or edge_bright > 5:
                     # This column crosses a border - mark darker/brighter pixels for correction
-                    if edge_dark_blue > 10:
+                    if edge_dark_blue >= 10:
                         border_correction_mask[:, x] |= (col < 180) | (col > 200)
                     else:
                         border_correction_mask[:, x] |= (col < 150) | (col > 200)
@@ -1595,7 +1651,7 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
             # Correct pixels that were in the watermark region OR are near watermark edges
             # (captures anti-aliased pixels and border pixels that are darker/brighter than background)
             # Use larger expansion to catch border pixels further from watermark center
-            expanded_mask = ndimage.binary_dilation(corner_mask, iterations=10)
+            expanded_mask = ndimage.binary_dilation(corner_mask, iterations=15)
             border_correction_mask &= expanded_mask
 
             if np.sum(border_correction_mask) > 0:
@@ -1655,10 +1711,11 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
                             is_already_border_like = False
 
                             # First check: is pixel already close to current_val (50-100 range = dark borders)?
-                            # If pixel is dark (< 100) and consistent across channels, it's likely already correct
-                            if current_val < 100:
+                            # If pixel is VERY dark (< 30) and consistent across channels, it's likely already correct
+                            # Changed from < 100 to < 30 because grey pixels (80-100) often need correction
+                            if current_val < 30:
                                 color_std = np.std(current_color)
-                                # If it's a consistent dark color (low variance), likely a correct border
+                                # If it's a consistent very dark color (low variance), likely a correct border
                                 if color_std < 30:
                                     is_already_border_like = True
 
@@ -1677,16 +1734,18 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
                             # STRATEGY: Only snap to extremes (0 or 255) if we found VERY dark/bright pixels
                             # For moderately dark borders (like dark blue), use the actual border color
 
-                            # If this is a gray pixel (100-180) and we found TRUE BLACK borders nearby, snap to black
-                            if 100 <= current_val <= 180 and len(all_very_dark) > 0:
+                            # If this is a dark/gray pixel (30-180) and we found TRUE BLACK borders nearby, snap to black
+                            # Extended range from [100,180] to [30,180] to catch grey pixels affected by overlay
+                            if 30 <= current_val <= 180 and len(all_very_dark) > 0:
                                 # We found very dark pixels (<50), so snap to black
                                 corner_cleaned[y, x] = 0
                             # If this is a gray-ish pixel and we found TRUE WHITE borders nearby, snap to white
                             elif 180 < current_val < 230 and len(all_very_bright) > 0:
                                 # We found very bright pixels (>230), so snap to white
                                 corner_cleaned[y, x] = 255
-                            # If gray (100-180) and we have dark borders nearby, use border color (don't force to black)
-                            elif 100 <= current_val <= 180 and len(all_colors) > 0:
+                            # If gray (30-180) and we have dark borders nearby, use border color (don't force to black)
+                            # Extended range from [100,180] to [30,180]
+                            elif 30 <= current_val <= 180 and len(all_colors) > 0:
                                 border_vals = [np.mean(c) for c in all_colors]
                                 avg_border = np.mean(border_vals)
                                 # If nearby borders are VERY dark (<50 avg), snap to black
