@@ -346,19 +346,29 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 lum_75 = np.percentile(luminances, 75)
 
                 # If the IQR (interquartile range) is very large, we have outliers
+                # Filter if there's a huge luminance gap (suggests sampling across very different regions)
                 if lum_75 - lum_25 > 100:
-                    # Split into two clusters at a luminance threshold between the quartiles
-                    threshold = (lum_25 + lum_75) / 2
-                    bright_mask = luminances > threshold
-                    dark_mask = ~bright_mask
+                    # Check if there's a large gap in the luminance distribution
+                    sorted_lums = np.sort(luminances)
+                    gaps = np.diff(sorted_lums)
+                    max_gap = np.max(gaps) if len(gaps) > 0 else 0
 
-                    # Keep whichever cluster has MORE pixels (more representative)
-                    if np.sum(bright_mask) > np.sum(dark_mask):
-                        boundary_colors = boundary_colors[bright_mask]
-                        print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (keeping larger bright cluster)")
-                    else:
-                        boundary_colors = boundary_colors[dark_mask]
-                        print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (keeping larger dark cluster)")
+                    # If there's a very large gap (>80), split at the gap
+                    if max_gap > 80:
+                        gap_idx = np.argmax(gaps)
+                        threshold = (sorted_lums[gap_idx] + sorted_lums[gap_idx + 1]) / 2
+
+                        bright_mask = luminances > threshold
+                        dark_mask = ~bright_mask
+
+                        # Keep the larger cluster
+                        if np.sum(bright_mask) > np.sum(dark_mask):
+                            boundary_colors = boundary_colors[bright_mask]
+                            print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (large gap={max_gap:.0f})")
+                        else:
+                            boundary_colors = boundary_colors[dark_mask]
+                            print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (large gap={max_gap:.0f})")
+                    # else: no huge gap, both clusters blend together - use all pixels
 
                 fill_color = np.median(boundary_colors, axis=0)
                 print(f"    Segment {segment_id} touches boundary, using median of {len(boundary_colors)} pixels → {fill_color.astype(int)}")
