@@ -189,8 +189,9 @@ for info in segment_info:
     fill_info = segment_fill_info.get(seg_id, {})
     boundary_status = "touches boundary" if fill_info.get('touches_boundary') else f"interior (dilation={fill_info.get('dilation_needed', '?')})"
     fill_color = fill_info.get('fill_color', [0, 0, 0])
+    fill_hex = f"#{fill_color[0]:02x}{fill_color[1]:02x}{fill_color[2]:02x}"
 
-    print(f"Segment {seg_id}: {info['size']}px, {boundary_status}, fill=RGB{tuple(fill_color)}")
+    print(f"Segment {seg_id}: {info['size']}px, {boundary_status}, fill={fill_hex}")
 
 # Create larger canvas with labels outside the image
 # Scale up to 1500x1500 (15x) for better visibility
@@ -309,16 +310,37 @@ def distribute_labels(segments, side):
             r = 8
             draw.ellipse([(comp_cx_scaled-r, comp_cy_scaled-r), (comp_cx_scaled+r, comp_cy_scaled+r)], fill=(0, 0, 0))
 
+        # Draw line from label to segment centroid
+        centroid_y_scaled = int(cy * scale_factor + scale_factor / 2) + margin
+        centroid_x_scaled = int(cx * scale_factor + scale_factor / 2) + margin
+
+        # Determine label edge point based on side
+        if side == 'left':
+            label_edge_x = label_x + 250  # Right edge of left label
+        else:
+            label_edge_x = label_x  # Left edge of right label
+
+        draw.line([(label_edge_x, label_y), (centroid_x_scaled, centroid_y_scaled)],
+                 fill=(0, 0, 255), width=2)  # Blue line to distinguish from sample lines
+
         # Draw label with background and fill color
         fill_info = segment_fill_info.get(seg_id, {})
         fill_color = fill_info.get('fill_color', [0, 0, 0])
+        fill_hex = f"#{fill_color[0]:02x}{fill_color[1]:02x}{fill_color[2]:02x}"
         text = f"{seg_id}: {info['size']}px"
-        text_line2 = f"fill: RGB{tuple(fill_color)}"
+        text_line2 = f"fill: {fill_hex}"
 
         bbox1 = draw.textbbox((0, 0), text, font=font)
         bbox2 = draw.textbbox((0, 0), text_line2, font=font)
         text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
         text_height = (bbox1[3] - bbox1[1]) + (bbox2[3] - bbox2[1]) + 5
+
+        # Ensure label stays within canvas bounds
+        if side == 'right':
+            # For right side, position so the right edge of label + swatch is within canvas
+            swatch_size = 30
+            total_width = text_width + 10 + swatch_size + 10  # text + gap + swatch + padding
+            text_align_x = min(text_align_x, canvas_size - total_width)
 
         draw.rectangle([text_align_x-5, label_y-text_height//2-5, text_align_x+text_width+5, label_y+text_height//2+5],
                       fill=(255, 255, 255), outline=(0,0,0), width=2)
