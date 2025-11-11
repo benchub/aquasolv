@@ -310,44 +310,15 @@ def segmented_inpaint_watermark(img_array, template_mask):
             # Find pixels that are: (1) reached by dilated segment, AND (2) in the watermark boundary ring
             boundary_contact = segment_dilated & watermark_boundary
 
-            # Use farthest-point sampling for better boundary coverage
-            segment_centroid = np.mean(segment_coords, axis=0)
+            # Sample ALL reachable boundary pixels for accurate color representation
             boundary_coords = np.argwhere(boundary_contact)
             boundary_colors = corner_original[boundary_contact]
 
-            # Calculate distances from centroid
-            distances_to_centroid = np.sqrt((boundary_coords[:, 0] - segment_centroid[0])**2 +
-                                           (boundary_coords[:, 1] - segment_centroid[1])**2)
-
-            num_samples = min(12, len(boundary_coords))
-            sample_indices = []
-
-            # First sample: closest to centroid
-            first_idx = np.argmin(distances_to_centroid)
-            sample_indices.append(first_idx)
-
-            # Subsequent samples: farthest from already-selected samples
-            for _ in range(num_samples - 1):
-                # For each candidate point, find distance to nearest selected sample
-                min_distances = np.full(len(boundary_coords), np.inf)
-                for selected_idx in sample_indices:
-                    selected_coord = boundary_coords[selected_idx]
-                    distances = np.sqrt((boundary_coords[:, 0] - selected_coord[0])**2 +
-                                       (boundary_coords[:, 1] - selected_coord[1])**2)
-                    min_distances = np.minimum(min_distances, distances)
-
-                # Select the point that is farthest from any selected sample
-                min_distances[sample_indices] = -1
-                next_idx = np.argmax(min_distances)
-                sample_indices.append(next_idx)
-
-            sample_colors = boundary_colors[sample_indices]
-
-            if len(sample_colors) > 0:
-                # Use simple median - matches visualize_segments.py
-                # Farthest-point sampling already ensures good distribution
-                fill_color = np.median(sample_colors, axis=0)
-                print(f"    Segment {segment_id} touches boundary at {np.sum(boundary_contact)} points, sampled from {len(sample_colors)} closest pixels to centroid")
+            if len(boundary_colors) > 0:
+                # Use median of ALL boundary pixels (not a subset)
+                # This is much more robust than sampling a few points
+                fill_color = np.median(boundary_colors, axis=0)
+                print(f"    Segment {segment_id} touches boundary at {np.sum(boundary_contact)} points, using median of all boundary pixels")
             else:
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
                 fill_color = np.median(watermark_boundary_colors, axis=0)
