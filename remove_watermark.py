@@ -21,6 +21,41 @@ import cv2
 from segmentation import find_segments
 
 
+# =============================================================================
+# CONSTANTS - Threshold values for watermark detection and segmentation
+# =============================================================================
+
+# Segmentation thresholds for outlier filtering
+IQR_OUTLIER_THRESHOLD = 90  # Interquartile range threshold for detecting outliers
+LUMINANCE_GAP_THRESHOLD = 75  # Minimum gap in luminance to split clusters
+CONTENTION_RATIO_THRESHOLD = 0.8  # Ratio for preferring less contested cluster
+
+# Color brightness thresholds (0-255 scale)
+VERY_DARK_THRESHOLD = 50  # Below this is considered very dark (near black)
+DARK_THRESHOLD = 100  # Below this is considered dark
+BRIGHT_THRESHOLD = 200  # Above this is considered bright
+VERY_BRIGHT_THRESHOLD = 230  # Above this is considered very bright (near white)
+
+# Border detection thresholds
+BORDER_DARK_EDGE_THRESHOLD = 30  # For detecting dark borders in edge regions
+BORDER_DARK_BLUE_THRESHOLD = 100  # For detecting dark blue borders
+BORDER_BRIGHT_EDGE_THRESHOLD = 230  # For detecting bright borders
+
+# Segmentation parameters
+WATERMARK_CORE_THRESHOLD = 0.5  # Template alpha threshold for watermark core
+WATERMARK_EDGE_THRESHOLD = 0.01  # Template alpha threshold for watermark edges
+CORNER_SIZE = 100  # Size of the corner region to process (100x100 pixels)
+
+# Dilation parameters
+SEGMENT_DILATION_ITERATIONS = 3  # Dilation iterations to reach boundary pixels
+BOUNDARY_DILATION_BASE = 4  # Base dilation for watermark boundary
+BOUNDARY_DILATION_INCREASED = 15  # Increased dilation for bright boundaries
+BORDER_CORRECTION_DILATION = 15  # Dilation for border correction mask
+
+# Quality thresholds
+MIN_SEGMENT_EDGE_PIXELS = 20  # Minimum edge pixels for quality assessment
+
+
 def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contention, segment_id):
     """
     Apply contention-aware outlier filtering to boundary samples.
@@ -42,12 +77,12 @@ def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contentio
     lum_75 = np.percentile(luminances, 75)
     iqr = lum_75 - lum_25
 
-    if iqr > 90:
+    if iqr > IQR_OUTLIER_THRESHOLD:
         sorted_lums = np.sort(luminances)
         gaps = np.diff(sorted_lums)
         max_gap = np.max(gaps) if len(gaps) > 0 else 0
 
-        if max_gap > 75:
+        if max_gap > LUMINANCE_GAP_THRESHOLD:
             gap_idx = np.argmax(gaps)
             threshold = (sorted_lums[gap_idx] + sorted_lums[gap_idx + 1]) / 2
 
@@ -58,11 +93,11 @@ def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contentio
             bright_contention = np.mean(boundary_contention[bright_mask]) if np.sum(bright_mask) > 0 else float('inf')
             dark_contention = np.mean(boundary_contention[dark_mask]) if np.sum(dark_mask) > 0 else float('inf')
 
-            if dark_contention < bright_contention * 0.8:
+            if dark_contention < bright_contention * CONTENTION_RATIO_THRESHOLD:
                 # Dark cluster is significantly less contested
                 print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (less contested dark cluster, gap={max_gap:.0f})")
                 return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
-            elif bright_contention < dark_contention * 0.8:
+            elif bright_contention < dark_contention * CONTENTION_RATIO_THRESHOLD:
                 # Bright cluster is significantly less contested
                 print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (less contested bright cluster, gap={max_gap:.0f})")
                 return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
@@ -221,7 +256,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
     from skimage.segmentation import felzenszwalb
 
     height, width = img_array.shape[:2]
-    corner_size = 100
+    corner_size = CORNER_SIZE
     y_start = height - corner_size
     x_start = width - corner_size
 
@@ -267,18 +302,18 @@ def segmented_inpaint_watermark(img_array, template_mask):
     # Check if boundary is mostly bright (e.g., white frame)
     boundary_brightness = np.mean(watermark_boundary_colors)
     # Also check if there's a significant amount of very bright pixels (white frame)
-    very_bright_pct = np.sum(np.mean(watermark_boundary_colors, axis=1) > 230) / len(watermark_boundary_colors) * 100
+    very_bright_pct = np.sum(np.mean(watermark_boundary_colors, axis=1) > VERY_BRIGHT_THRESHOLD) / len(watermark_boundary_colors) * 100
 
     if boundary_brightness > 180 or very_bright_pct > 30:
         # Boundary has too much white, likely sampling white frame instead of actual background
         # Increase dilation to get past the frame
         print(f"  Boundary too bright (avg={boundary_brightness:.0f}, {very_bright_pct:.0f}% very bright), increasing dilation")
-        iterations = 15
+        iterations = BOUNDARY_DILATION_INCREASED
         dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
         watermark_boundary = dilated_watermark & ~full_watermark_mask
         watermark_boundary_colors = corner_original[watermark_boundary]
         boundary_brightness = np.mean(watermark_boundary_colors)
-        very_bright_pct = np.sum(np.mean(watermark_boundary_colors, axis=1) > 230) / len(watermark_boundary_colors) * 100
+        very_bright_pct = np.sum(np.mean(watermark_boundary_colors, axis=1) > VERY_BRIGHT_THRESHOLD) / len(watermark_boundary_colors) * 100
 
     watermark_boundary_coords = np.argwhere(watermark_boundary)
     print(f"  Watermark boundary has {len(watermark_boundary_coords)} pixels (dilation={iterations}, brightness={boundary_brightness:.0f})")
@@ -452,7 +487,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
         # Expand the segment to cover anti-aliased halo
         # Use less expansion for bright segments to avoid making white borders thicker
         fill_brightness = np.mean(fill_color)
-        if fill_brightness > 200:
+        if fill_brightness > BRIGHT_THRESHOLD:
             # Bright segments (white borders) - no expansion to preserve border thickness
             expansion_iterations = 0
         else:
@@ -523,7 +558,7 @@ def analyze_watermark_features(img_array, mask):
     Returns a dict with feature information.
     """
     height, width = img_array.shape[:2]
-    corner_size = 100
+    corner_size = CORNER_SIZE
     y_start = height - corner_size
     x_start = width - corner_size
     corner = img_array[y_start:, x_start:, :]
@@ -577,7 +612,7 @@ def detect_watermark_mask(img_array, threshold=None):
 
     # Focus on the lower-right corner where watermark appears
     # The watermark is typically around 40-50 pixels wide, positioned about 30-80 pixels from the edge
-    corner_size = 100
+    corner_size = CORNER_SIZE
     y_start = height - corner_size
     x_start = width - corner_size
     corner = img_array[y_start:, x_start:]
@@ -815,7 +850,7 @@ def detect_L_pattern(img_array):
     which causes the standard algorithm to fail.
     """
     height, width = img_array.shape[:2]
-    corner_size = 100
+    corner_size = CORNER_SIZE
     y_start = height - corner_size
     x_start = width - corner_size
     corner = img_array[y_start:, x_start:]
@@ -962,7 +997,11 @@ def get_watermark_template():
     template_path = "watermark_template.npy"
 
     if os.path.exists(template_path):
-        return np.load(template_path)
+        try:
+            return np.load(template_path)
+        except Exception as e:
+            print(f"Warning: Could not load template from {template_path}: {e}")
+            # Continue to try extracting from ch.png
 
     # Extract from ch.png if available
     if os.path.exists("samples/ch.png") and os.path.exists("desired/ch.png"):
@@ -1000,7 +1039,7 @@ def remove_watermark_template_based(img_array):
     Returns the cleaned image array.
     """
     height, width = img_array.shape[:2]
-    corner_size = 100
+    corner_size = CORNER_SIZE
     y_start = height - corner_size
     x_start = width - corner_size
 
@@ -1438,7 +1477,7 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
     # After watermark removal, some pixels may be gray instead of black/white border color
     # Detect and correct these border pixels
     height, width = img_array.shape[:2]
-    corner_size = 100
+    corner_size = CORNER_SIZE
     y_start = height - corner_size
     x_start = width - corner_size
     corner_cleaned = cleaned[y_start:, x_start:]
@@ -1456,11 +1495,11 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
         corner_original_gray = np.mean(corner_original, axis=2)
 
         # Check for TRUE black pixels (< 30, not just dark) in ORIGINAL
-        true_black = corner_original_gray < 30
+        true_black = corner_original_gray < BORDER_DARK_EDGE_THRESHOLD
         num_true_black = np.sum(true_black)
 
-        # Check for TRUE white pixels (> 230) in ORIGINAL
-        true_white = corner_original_gray > 230
+        # Check for TRUE white pixels in ORIGINAL
+        true_white = corner_original_gray > VERY_BRIGHT_THRESHOLD
         num_true_white = np.sum(true_white)
 
         # Conservative thresholds based on analysis:
@@ -1739,7 +1778,7 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
     cleaned = np.clip(cleaned, 0, 255).astype(np.uint8)
 
     # Assess removal quality
-    corner_size = 100
+    corner_size = CORNER_SIZE
     cleaned_corner = cleaned[height - corner_size:, width - corner_size:]
     mask_corner = mask[height - corner_size:, width - corner_size:]
 
@@ -1849,9 +1888,24 @@ def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_
     If try_multiple_thresholds is True, will try several thresholds and pick the best result
     based on quality scoring.
     """
-    # Load image
-    img = Image.open(input_path)
-    img_array = np.array(img)
+    # Load image with error handling
+    try:
+        img = Image.open(input_path)
+    except FileNotFoundError:
+        print(f"Error: Image file not found: {input_path}")
+        return
+    except PermissionError:
+        print(f"Error: Permission denied accessing file: {input_path}")
+        return
+    except Exception as e:
+        print(f"Error opening image {input_path}: {e}")
+        return
+
+    try:
+        img_array = np.array(img)
+    except Exception as e:
+        print(f"Error converting image to array: {e}")
+        return
 
     print(f"Processing {input_path}...")
     print(f"Image size: {img_array.shape}")
@@ -1907,12 +1961,22 @@ def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_
         if quality is not None:
             print(f"Quality: overall={quality['overall']:.1f}, smooth={quality['smoothness']:.1f}, consistent={quality['consistency']:.1f}, edges={quality['edge_preservation']:.1f}")
 
-    # Save result
+    # Save result with error handling
     if output_path is None:
         output_path = input_path.rsplit('.', 1)[0] + '_cleaned.png'
 
-    Image.fromarray(cleaned).save(output_path)
-    print(f"Saved to: {output_path}")
+    try:
+        Image.fromarray(cleaned).save(output_path)
+        print(f"Saved to: {output_path}")
+    except PermissionError:
+        print(f"Error: Permission denied writing to: {output_path}")
+        return
+    except OSError as e:
+        print(f"Error saving image to {output_path}: {e}")
+        return
+    except Exception as e:
+        print(f"Unexpected error saving image: {e}")
+        return
 
 
 def main():
