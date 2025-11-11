@@ -32,6 +32,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     edge_mask = (template > 0.005) & (template <= core_threshold)
 
     # Auto-determine quantization based on color variance if not specified
+    color_std = None  # Will be used later for dynamic threshold adjustment
     if quantization is None:
         watermark_colors = corner[core_mask]
         if len(watermark_colors) > 0:
@@ -71,6 +72,11 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             print(f'Auto-selected quantization: {quantization} ({reason})')
         else:
             quantization = 20  # Fallback
+    else:
+        # If quantization was provided, still calculate color_std for threshold adjustment
+        watermark_colors = corner[core_mask]
+        if len(watermark_colors) > 0:
+            color_std = np.std(watermark_colors, axis=0).mean()
 
     # Quantize colors
     color_map = (corner // quantization) * quantization
@@ -161,9 +167,28 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             if adj_seg != seg_id:
                 adjacency.add((min(seg_id, adj_seg), max(seg_id, adj_seg)))
 
-    # Merge adjacent segments with similar colors
-    # Use a threshold that prevents excessive chaining while allowing gradual transitions
-    COLOR_SIMILARITY_THRESHOLD = 25
+    # Dynamically adjust merging thresholds based on color variance
+    # Low variance images (std < 20): Strict thresholds to avoid over-merging similar colors
+    # High variance images (std > 35): Permissive thresholds since colors are naturally distinct
+    # Medium variance images: Balanced thresholds
+    if color_std is not None:
+        if color_std < 20:
+            # Low variance: Very strict (e.g., fibbing.png with std=11.1)
+            COLOR_SIMILARITY_THRESHOLD = 15
+            MAX_GROUP_SPAN = 20
+        elif color_std < 35:
+            # Medium variance: Balanced
+            COLOR_SIMILARITY_THRESHOLD = 20
+            MAX_GROUP_SPAN = 25
+        else:
+            # High variance: More permissive (e.g., double cleanse.png with std=42.8)
+            COLOR_SIMILARITY_THRESHOLD = 25
+            MAX_GROUP_SPAN = 30
+        print(f'Dynamic merge thresholds: similarity={COLOR_SIMILARITY_THRESHOLD}, span={MAX_GROUP_SPAN} (std={color_std:.1f})')
+    else:
+        # Fallback to balanced thresholds if color_std unavailable
+        COLOR_SIMILARITY_THRESHOLD = 20
+        MAX_GROUP_SPAN = 25
     merge_map = {info['id']: info['id'] for info in segment_info}
     # Track the color range of each merged group to prevent over-merging
     group_color_min = {info['id']: np.array(info['color'], dtype=np.int32) for info in segment_info}
@@ -188,7 +213,6 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                 span = np.max(new_max - new_min)
 
                 # Only merge if the resulting group's color span is reasonable
-                MAX_GROUP_SPAN = 40  # Maximum allowed color range within a merged group
                 if span <= MAX_GROUP_SPAN:
                     merge_map[root2] = root1
                     # Update color range of the merged group
