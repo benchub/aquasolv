@@ -82,7 +82,14 @@ def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contentio
         gaps = np.diff(sorted_lums)
         max_gap = np.max(gaps) if len(gaps) > 0 else 0
 
-        if max_gap > LUMINANCE_GAP_THRESHOLD:
+        # Lower gap threshold for highly contested boundaries with very high IQR
+        # When IQR > 120 and >30% contested, reduce gap threshold to catch gradual transitions
+        contested_count = np.sum(boundary_contention > 1)
+        gap_threshold = LUMINANCE_GAP_THRESHOLD
+        if iqr > 120 and contested_count > len(boundary_contention) * 0.3:
+            gap_threshold = 60  # Reduced threshold for problematic cases
+
+        if max_gap > gap_threshold:
             gap_idx = np.argmax(gaps)
             threshold = (sorted_lums[gap_idx] + sorted_lums[gap_idx + 1]) / 2
 
@@ -470,6 +477,19 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 boundary_colors, boundary_contention, _ = apply_contention_aware_outlier_filtering(
                     boundary_colors, boundary_contention, segment_id
                 )
+
+                # If segment has many uncontested pixels, use only those
+                # This releases contested pixels for other segments that may need them
+                uncontested_mask = boundary_contention == 1
+                uncontested_count = np.sum(uncontested_mask)
+                contested_count = np.sum(boundary_contention > 1)
+
+                # Use only uncontested if we have at least 20 uncontested samples
+                # This threshold ensures we have enough samples for reliable color estimation
+                if uncontested_count >= 20:
+                    print(f"    Segment {segment_id}: Using {uncontested_count} uncontested samples (ignoring {contested_count} contested)")
+                    boundary_colors = boundary_colors[uncontested_mask]
+                    boundary_contention = boundary_contention[uncontested_mask]
 
                 # Compute weighted median
                 weights = 1.0 / boundary_contention  # Inverse of contention count
