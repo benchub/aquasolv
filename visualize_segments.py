@@ -89,6 +89,15 @@ if boundary_brightness > 180 or very_bright_pct > 30:
     dilated_watermark = binary_dilation(full_watermark_mask, iterations=iterations)
     watermark_boundary = dilated_watermark & ~full_watermark_mask
 
+# Compute boundary pixel contention map (how many segments reach each pixel)
+unique_segments = [info['id'] for info in segment_info]
+boundary_segment_count = np.zeros(corner.shape[:2], dtype=int)
+for seg_id in unique_segments:
+    seg_mask = segments == seg_id
+    seg_dilated = binary_dilation(seg_mask, iterations=3)
+    seg_boundary_contact = seg_dilated & watermark_boundary
+    boundary_segment_count[seg_boundary_contact] += 1
+
 segment_fill_info = {}
 for info in segment_info:
     seg_id = info['id']
@@ -103,14 +112,65 @@ for info in segment_info:
         # Segment touches boundary - sample from boundary
         boundary_coords = np.argwhere(boundary_contact)
         boundary_colors = corner[boundary_contact]
+        boundary_contention = boundary_segment_count[boundary_contact]
 
         # Sample ALL reachable boundary pixels for accurate color representation
         # Using all pixels gives a much more robust median than cherry-picking a few
         sample_coords = boundary_coords
         sample_colors = boundary_colors
 
-        # Calculate fill color (median of all reachable boundary pixels)
-        fill_color = np.median(sample_colors, axis=0).astype(int)
+        # Apply contention-aware outlier filtering
+        luminances = np.mean(boundary_colors, axis=1)
+        lum_25 = np.percentile(luminances, 25)
+        lum_75 = np.percentile(luminances, 75)
+        iqr = lum_75 - lum_25
+
+        if iqr > 90:
+            sorted_lums = np.sort(luminances)
+            gaps = np.diff(sorted_lums)
+            max_gap = np.max(gaps) if len(gaps) > 0 else 0
+
+            if max_gap > 75:
+                gap_idx = np.argmax(gaps)
+                threshold = (sorted_lums[gap_idx] + sorted_lums[gap_idx + 1]) / 2
+
+                bright_mask = luminances > threshold
+                dark_mask = ~bright_mask
+
+                # Use contention to decide which cluster to keep
+                bright_contention = np.mean(boundary_contention[bright_mask]) if np.sum(bright_mask) > 0 else float('inf')
+                dark_contention = np.mean(boundary_contention[dark_mask]) if np.sum(dark_mask) > 0 else float('inf')
+
+                if dark_contention < bright_contention * 0.8:
+                    sample_colors = boundary_colors[dark_mask]
+                    sample_coords = boundary_coords[dark_mask]
+                    boundary_contention = boundary_contention[dark_mask]
+                elif bright_contention < dark_contention * 0.8:
+                    sample_colors = boundary_colors[bright_mask]
+                    sample_coords = boundary_coords[bright_mask]
+                    boundary_contention = boundary_contention[bright_mask]
+                elif np.sum(bright_mask) > np.sum(dark_mask):
+                    sample_colors = boundary_colors[bright_mask]
+                    sample_coords = boundary_coords[bright_mask]
+                    boundary_contention = boundary_contention[bright_mask]
+                else:
+                    sample_colors = boundary_colors[dark_mask]
+                    sample_coords = boundary_coords[dark_mask]
+                    boundary_contention = boundary_contention[dark_mask]
+
+        # Calculate fill color using weighted median
+        weights = 1.0 / boundary_contention
+        weighted_fill = np.zeros(3)
+        for c in range(3):
+            channel_values = sample_colors[:, c]
+            sorted_idx = np.argsort(channel_values)
+            sorted_values = channel_values[sorted_idx]
+            sorted_weights = weights[sorted_idx]
+            cum_weights = np.cumsum(sorted_weights)
+            total_weight = cum_weights[-1]
+            median_idx = np.searchsorted(cum_weights, total_weight / 2)
+            weighted_fill[c] = sorted_values[median_idx]
+        fill_color = weighted_fill.astype(int)
 
         segment_fill_info[seg_id] = {
             'touches_boundary': True,
