@@ -217,8 +217,32 @@ def segmented_inpaint_watermark(img_array, template_mask):
     # Find where the watermark core ends (not the dilated boundary, but the actual watermark pixels)
     watermark_core_edge = core_mask & ~binary_dilation(~core_mask, iterations=1)
 
+    # CRITICAL: Assign unassigned core pixels to nearest segment
+    # Some pixels in core_mask may have segment = -1 (unassigned)
+    # These create artifacts if left unfilled
+    unassigned_core = core_mask & (segments == -1)
+    if np.any(unassigned_core):
+        print(f"  Found {np.sum(unassigned_core)} unassigned core pixels, assigning to nearest segments")
+        unassigned_coords = np.argwhere(unassigned_core)
+
+        # Get all assigned segment coordinates
+        assigned_core = core_mask & (segments != -1)
+        assigned_coords = np.argwhere(assigned_core)
+        assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
+
+        # For each unassigned pixel, find nearest assigned pixel
+        for uy, ux in unassigned_coords:
+            distances = np.sqrt((assigned_coords[:, 0] - uy)**2 + (assigned_coords[:, 1] - ux)**2)
+            nearest_idx = np.argmin(distances)
+            segments[uy, ux] = assigned_ids[nearest_idx]
+
     # Track which pixels have been filled by segments to prevent overlap
     filled_pixels = np.zeros(corner.shape[:2], dtype=bool)
+
+    # Track segment fill colors and coordinates for edge pixel assignment
+    segment_fill_colors = {}
+    segment_all_coords = []
+    segment_all_ids = []
 
     for segment_id in unique_segments:
         # Get pixels in this segment
@@ -315,10 +339,29 @@ def segmented_inpaint_watermark(img_array, template_mask):
             boundary_colors = corner_original[boundary_contact]
 
             if len(boundary_colors) > 0:
-                # Use median of ALL boundary pixels (not a subset)
-                # This is much more robust than sampling a few points
+                # Filter outliers before computing median
+                # Check if there's a large luminance gap suggesting multiple distinct regions
+                luminances = np.mean(boundary_colors, axis=1)
+                lum_25 = np.percentile(luminances, 25)
+                lum_75 = np.percentile(luminances, 75)
+
+                # If the IQR (interquartile range) is very large, we have outliers
+                if lum_75 - lum_25 > 100:
+                    # Split into two clusters at a luminance threshold between the quartiles
+                    threshold = (lum_25 + lum_75) / 2
+                    bright_mask = luminances > threshold
+                    dark_mask = ~bright_mask
+
+                    # Keep whichever cluster has MORE pixels (more representative)
+                    if np.sum(bright_mask) > np.sum(dark_mask):
+                        boundary_colors = boundary_colors[bright_mask]
+                        print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (keeping larger bright cluster)")
+                    else:
+                        boundary_colors = boundary_colors[dark_mask]
+                        print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (keeping larger dark cluster)")
+
                 fill_color = np.median(boundary_colors, axis=0)
-                print(f"    Segment {segment_id} touches boundary at {np.sum(boundary_contact)} points, using median of all boundary pixels")
+                print(f"    Segment {segment_id} touches boundary, using median of {len(boundary_colors)} pixels → {fill_color.astype(int)}")
             else:
                 print(f"    Warning: Segment {segment_id} touches boundary but no exterior samples found")
                 fill_color = np.median(watermark_boundary_colors, axis=0)
@@ -354,24 +397,35 @@ def segmented_inpaint_watermark(img_array, template_mask):
         corner[segment_expanded_coords[:, 0], segment_expanded_coords[:, 1]] = fill_color
         # Mark these pixels as filled
         filled_pixels[segment_expanded_coords[:, 0], segment_expanded_coords[:, 1]] = True
+
+        # Store segment fill color and coordinates for edge pixel assignment
+        segment_fill_colors[segment_id] = fill_color
+        segment_all_coords.extend(segment_coords.tolist())
+        segment_all_ids.extend([segment_id] * len(segment_coords))
+
         # DEBUG: Verify what was written
         sample_pixel = corner[segment_coords[0, 0], segment_coords[0, 1]]
         print(f"    DEBUG: After filling {len(segment_expanded_coords)} pixels (expanded from {len(segment_coords)}), pixel at {tuple(segment_coords[0])} = RGB{tuple(sample_pixel)} = #{sample_pixel[0]:02x}{sample_pixel[1]:02x}{sample_pixel[2]:02x}")
 
     # Step 3: Handle anti-aliased edges
-    # For edge pixels with low alpha, just fill them like we do for core pixels
-    # The template alpha represents watermark strength, so even edge pixels should be replaced
+    # Assign each edge pixel to its nearest segment and use that segment's color
     if np.any(edge_mask):
         print(f"  Handling {np.sum(edge_mask)} anti-aliased edge pixels")
 
+        # Convert lists to numpy arrays for efficient distance calculations
+        segment_all_coords = np.array(segment_all_coords)
+        segment_all_ids = np.array(segment_all_ids)
+
         edge_coords = np.argwhere(edge_mask)
         for ey, ex in edge_coords:
-            # For each edge pixel, find closest boundary pixels (same as core pixels)
-            distances = np.sqrt(np.sum((watermark_boundary_coords - np.array([ey, ex]))**2, axis=1))
-            num_closest = max(10, len(distances) // 5)
-            closest_indices = np.argsort(distances)[:num_closest]
-            closest_boundary_colors = watermark_boundary_colors[closest_indices]
-            fill_color = np.median(closest_boundary_colors, axis=0)
+            # Find the nearest segment by checking the segments array
+            # Find closest core pixel and use its segment assignment
+            distances_to_core = np.sqrt(np.sum((segment_all_coords - np.array([ey, ex]))**2, axis=1))
+            closest_core_idx = np.argmin(distances_to_core)
+            closest_segment_id = segment_all_ids[closest_core_idx]
+
+            # Use that segment's fill color
+            fill_color = segment_fill_colors[closest_segment_id]
             corner[ey, ex] = fill_color
 
     result[y_start:, x_start:] = corner
