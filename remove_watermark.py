@@ -100,21 +100,37 @@ def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contentio
             bright_contention = np.mean(boundary_contention[bright_mask]) if np.sum(bright_mask) > 0 else float('inf')
             dark_contention = np.mean(boundary_contention[dark_mask]) if np.sum(dark_mask) > 0 else float('inf')
 
-            if dark_contention < bright_contention * CONTENTION_RATIO_THRESHOLD:
-                # Dark cluster is significantly less contested
-                print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (less contested dark cluster, gap={max_gap:.0f})")
+            # Calculate size ratio and contention ratio
+            bright_count = np.sum(bright_mask)
+            dark_count = np.sum(dark_mask)
+            size_ratio = min(bright_count, dark_count) / max(bright_count, dark_count) if max(bright_count, dark_count) > 0 else 0
+
+            # Calculate contention difference
+            if bright_contention < dark_contention:
+                contention_ratio = bright_contention / dark_contention if dark_contention > 0 else 0
+                less_contested = "bright"
+            else:
+                contention_ratio = dark_contention / bright_contention if bright_contention > 0 else 0
+                less_contested = "dark"
+
+            # Only use contention to decide if one cluster is SIGNIFICANTLY less contested (ratio < 0.7)
+            # AND the size difference isn't too extreme (ratio > 0.5, meaning smaller is at least 50% of larger)
+            if less_contested == "dark" and contention_ratio < 0.7 and size_ratio > 0.5:
+                # Dark cluster is significantly less contested and reasonably sized
+                print(f"    Segment {segment_id}: Filtered out {bright_count} bright outliers (less contested dark cluster, gap={max_gap:.0f})")
                 return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
-            elif bright_contention < dark_contention * CONTENTION_RATIO_THRESHOLD:
-                # Bright cluster is significantly less contested
-                print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (less contested bright cluster, gap={max_gap:.0f})")
-                return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
-            elif np.sum(bright_mask) > np.sum(dark_mask):
-                # No clear winner by contention, keep larger cluster
-                print(f"    Segment {segment_id}: Filtered out {np.sum(dark_mask)} dark outliers (larger bright cluster, gap={max_gap:.0f})")
+            elif less_contested == "bright" and contention_ratio < 0.7 and size_ratio > 0.5:
+                # Bright cluster is significantly less contested and reasonably sized
+                print(f"    Segment {segment_id}: Filtered out {dark_count} dark outliers (less contested bright cluster, gap={max_gap:.0f})")
                 return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
             else:
-                print(f"    Segment {segment_id}: Filtered out {np.sum(bright_mask)} bright outliers (larger dark cluster, gap={max_gap:.0f})")
-                return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
+                # Contention is similar or size difference is too large, prefer the larger cluster
+                if dark_count > bright_count:
+                    print(f"    Segment {segment_id}: Filtered out {bright_count} bright outliers (larger dark cluster, gap={max_gap:.0f})")
+                    return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
+                else:
+                    print(f"    Segment {segment_id}: Filtered out {dark_count} dark outliers (larger bright cluster, gap={max_gap:.0f})")
+                    return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
 
     return boundary_colors, boundary_contention, None
 
