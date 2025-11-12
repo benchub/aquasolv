@@ -1954,19 +1954,21 @@ def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_
     if try_multiple_thresholds and threshold is None:
         print("\nTrying multiple thresholds to find best result...")
 
-        # Try different thresholds WITH ALPHA-BASED ONLY (no multi-algorithm yet)
-        # This ensures we're comparing apples-to-apples across thresholds
+        # Try different thresholds WITH SEGMENTED ALGORITHM
+        # Since we're forcing segmented, test thresholds using segmented quality
         test_thresholds = [None, 3, 5, 7, 10, 15]
         results = []
 
         for test_threshold in test_thresholds:
             print(f"\n--- Testing threshold={test_threshold} ---")
-            cleaned, quality, mask = remove_watermark_core(img_array, test_threshold, enable_multi_algorithm=False)
+            cleaned, quality, mask = remove_watermark_core(img_array, test_threshold, enable_multi_algorithm=True)
 
             if cleaned is not None and quality is not None:
                 results.append({
                     'threshold': test_threshold,
                     'quality': quality,
+                    'cleaned': cleaned,
+                    'mask': mask,
                 })
                 print(f"Quality: overall={quality['overall']:.1f}, smooth={quality['smoothness']:.1f}, consistent={quality['consistency']:.1f}, edges={quality['edge_preservation']:.1f}")
 
@@ -1974,16 +1976,17 @@ def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_
             print("No watermark detected with any threshold!")
             return
 
-        # Pick the best threshold based on alpha-based quality
+        # Pick the best threshold based on segmented quality
         best_result = max(results, key=lambda r: r['quality']['overall'])
         best_threshold = best_result['threshold']
         best_quality = best_result['quality']
 
-        print(f"\n=== Selected threshold={best_threshold} with alpha quality={best_quality['overall']:.1f} ===")
+        print(f"\n=== Selected threshold={best_threshold} with quality={best_quality['overall']:.1f} ===")
 
-        # Now run the BEST threshold with multi-algorithm enabled
-        print(f"Running multi-algorithm selection on best threshold...")
-        cleaned, quality, mask = remove_watermark_core(img_array, best_threshold, enable_multi_algorithm=True)
+        # Use the best result directly (already ran with multi-algorithm)
+        cleaned = best_result['cleaned']
+        quality = best_result['quality']
+        mask = best_result['mask']
 
     else:
         # Single threshold mode - use multi-algorithm
