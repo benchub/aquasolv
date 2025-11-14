@@ -307,6 +307,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
     segment_info = seg_result['segment_info']
     core_mask = seg_result['core_mask']
     edge_mask = seg_result['edge_mask']
+    bg_variance = seg_result['bg_variance']
 
     unique_segments = [info['id'] for info in segment_info]
 

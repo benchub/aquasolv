@@ -112,8 +112,23 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     
     print(f'Found {len(segment_info)} initial segments')
 
+    # Determine if we should use boundary checking based on image variance FIRST
+    # High variance images don't benefit from boundary color checks
+    bg_mask = ~(template > 0.01)
+    bg_pixels = corner[bg_mask]
+    bg_variance = np.mean(np.std(bg_pixels, axis=0))
+    wm_pixels = corner[core_mask]
+    wm_variance = np.mean(np.std(wm_pixels, axis=0))
+
+    # Use boundary checking only for low-variance images with distinct backgrounds
+    use_boundary_checking = (bg_variance < 30) and (wm_variance < 25)
+
+    if not use_boundary_checking:
+        print(f'  Skipping boundary checking for high-variance image (bg_var={bg_variance:.1f}, wm_var={wm_variance:.1f})')
+
     # First pass: Merge segments with identical quantized colors (even if not adjacent)
     # This handles cases where the same color appears in multiple disconnected regions
+    # BUT: For low-variance images, don't merge if segments are on opposite sides
     segment_colors = {info['id']: info['color'] for info in segment_info}
     color_to_segments = {}
     for seg_id, color in segment_colors.items():
@@ -126,28 +141,57 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     identical_color_merges = 0
     for color_key, seg_ids in color_to_segments.items():
         if len(seg_ids) > 1:
-            # Merge all segments with this color into the first one
-            root_seg = seg_ids[0]
-            for seg_id in seg_ids[1:]:
-                segments[segments == seg_id] = root_seg
-                identical_color_merges += 1
+            if use_boundary_checking:
+                # For low-variance images, check if segments are on opposite sides
+                # Group by spatial region (left vs right)
+                left_segs = []
+                right_segs = []
+                for seg_id in seg_ids:
+                    info = next(i for i in segment_info if i['id'] == seg_id)
+                    cy, cx = info['centroid']
+                    if cx < 48:
+                        left_segs.append(seg_id)
+                    elif cx > 52:
+                        right_segs.append(seg_id)
+                    else:
+                        # Center - add to larger group or left if equal
+                        if len(left_segs) > len(right_segs):
+                            left_segs.append(seg_id)
+                        else:
+                            right_segs.append(seg_id)
+
+                # Merge within each spatial group separately
+                for group in [left_segs, right_segs]:
+                    if len(group) > 1:
+                        root_seg = group[0]
+                        for seg_id in group[1:]:
+                            segments[segments == seg_id] = root_seg
+                            identical_color_merges += 1
+            else:
+                # High-variance images: merge all identical colors unconditionally
+                root_seg = seg_ids[0]
+                for seg_id in seg_ids[1:]:
+                    segments[segments == seg_id] = root_seg
+                    identical_color_merges += 1
 
     # Rebuild segment_info after identical color merges
     if identical_color_merges > 0:
+        # Find all unique segment IDs that still exist after merging
+        surviving_segments = np.unique(segments[segments >= 0])
+
         new_segment_info = []
-        for info in segment_info:
-            seg_id = info['id']
-            # Check if this segment still exists or was merged
-            if seg_id in color_to_segments[tuple(info['color'])]:
-                if color_to_segments[tuple(info['color'])][0] == seg_id:
-                    # This is the root segment for this color
-                    merged_mask = (segments == seg_id)
+        for seg_id in surviving_segments:
+            merged_mask = (segments == seg_id)
+            if np.sum(merged_mask) > 0:
+                # Find the original color for this segment
+                original_info = next((i for i in segment_info if i['id'] == seg_id), None)
+                if original_info:
                     new_segment_info.append({
                         'id': seg_id,
                         'size': np.sum(merged_mask),
                         'mask': merged_mask,
                         'centroid': np.mean(np.argwhere(merged_mask), axis=0),
-                        'color': info['color']
+                        'color': original_info['color']
                     })
         segment_info = new_segment_info
         print(f'After merging {identical_color_merges} segments with identical colors: {len(segment_info)} segments')
@@ -193,6 +237,8 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     # Track the color range of each merged group to prevent over-merging
     group_color_min = {info['id']: np.array(info['color'], dtype=np.int32) for info in segment_info}
     group_color_max = {info['id']: np.array(info['color'], dtype=np.int32) for info in segment_info}
+    # For size-aware boundary checking
+    segment_sizes = {info['id']: info['size'] for info in segment_info}
 
     def find_root(x):
         if merge_map[x] != x:
@@ -207,17 +253,43 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             root1 = find_root(seg1)
             root2 = find_root(seg2)
             if root1 != root2:
-                # Check if merging would create too large a color span
-                new_min = np.minimum(group_color_min[root1], group_color_min[root2])
-                new_max = np.maximum(group_color_max[root1], group_color_max[root2])
-                span = np.max(new_max - new_min)
+                # For low-variance images, check if segments are on different backgrounds
+                # by comparing colors in a ring around the watermark
+                skip_merge = False
+                if use_boundary_checking:
+                    # Get segment centroids
+                    info1 = next((i for i in segment_info if i['id'] == seg1), None)
+                    info2 = next((i for i in segment_info if i['id'] == seg2), None)
+                    if info1 and info2:
+                        cy1, cx1 = info1['centroid']
+                        cy2, cx2 = info2['centroid']
 
-                # Only merge if the resulting group's color span is reasonable
-                if span <= MAX_GROUP_SPAN:
-                    merge_map[root2] = root1
-                    # Update color range of the merged group
-                    group_color_min[root1] = new_min
-                    group_color_max[root1] = new_max
+                        # Simple heuristic: if segments are on opposite sides (> 30px apart)
+                        # and have different quantized colors, don't merge
+                        horizontal_dist = abs(cx1 - cx2)
+                        vertical_dist = abs(cy1 - cy2)
+                        size1 = segment_sizes.get(seg1, 0)
+                        size2 = segment_sizes.get(seg2, 0)
+                        min_size = min(size1, size2)
+
+                        # Be strict for large segments far apart, permissive for small segments
+                        if horizontal_dist > 30 or vertical_dist > 30:
+                            if min_size >= 50 and color_diff > 10:
+                                skip_merge = True
+
+                if not skip_merge:
+                    # Check if merging would create too large a color span
+                    new_min = np.minimum(group_color_min[root1], group_color_min[root2])
+                    new_max = np.maximum(group_color_max[root1], group_color_max[root2])
+                    span = np.max(new_max - new_min)
+
+                    # Only merge if the resulting group's color span is reasonable
+                    if span <= MAX_GROUP_SPAN:
+                        merge_map[root2] = root1
+                        # Update color range and size of the merged group
+                        group_color_min[root1] = new_min
+                        group_color_max[root1] = new_max
+                        segment_sizes[root1] = segment_sizes.get(root1, 0) + segment_sizes.get(root2, 0)
     
     # Apply merges to segment map
     for info in segment_info:
@@ -296,5 +368,6 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         'segments': segments,
         'segment_info': segment_info,
         'core_mask': core_mask,
-        'edge_mask': edge_mask
+        'edge_mask': edge_mask,
+        'bg_variance': bg_variance
     }
