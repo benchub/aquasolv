@@ -174,89 +174,106 @@ if lines is not None:
                     print(f"  Lines {i} and {j} intersect at ({ix:.1f}, {iy:.1f}) inside watermark")
 
     # Third pass: trim lines at intersections
-    # When both ends are in background, create segments from both directions
-    trimmed_lines = []
+    # Store temporary line endpoints for iterative refinement
+    line_endpoints = {}
     for i, line1 in enumerate(extended_lines):
         (x1, y1), (x2, y2) = line1
+        orig_x1, orig_y1 = detected_lines[i][0]
+        orig_x2, orig_y2 = detected_lines[i][1]
+        detected_center_x = (orig_x1 + orig_x2) / 2
+        detected_center_y = (orig_y1 + orig_y2) / 2
 
-        if not line_intersections[i]:
-            # No intersections, keep full line
-            trimmed_lines.append(line1)
-            continue
+        dist_x1_to_detected = np.sqrt((x1 - detected_center_x)**2 + (y1 - detected_center_y)**2)
+        dist_x2_to_detected = np.sqrt((x2 - detected_center_x)**2 + (y2 - detected_center_y)**2)
 
-        # Determine which endpoint is in background vs watermark by checking the mask
-        x1_check = int(np.clip(x1, 0, 99))
-        y1_check = int(np.clip(y1, 0, 99))
-        x2_check = int(np.clip(x2, 0, 99))
-        y2_check = int(np.clip(y2, 0, 99))
+        source_end = (x1, y1) if dist_x1_to_detected < dist_x2_to_detected else (x2, y2)
+        other_end = (x2, y2) if dist_x1_to_detected < dist_x2_to_detected else (x1, y1)
 
-        x1_in_wm = watermark_mask[y1_check, x1_check]
-        x2_in_wm = watermark_mask[y2_check, x2_check]
+        line_endpoints[i] = {'source': source_end, 'target': other_end, 'intersections': line_intersections[i]}
 
-        # Case 1: One end in background, one in watermark - trim from background to first intersection
-        if (not x1_in_wm and x2_in_wm) or (x1_in_wm and not x2_in_wm):
-            bg_end = (x1, y1) if not x1_in_wm else (x2, y2)
+    # Iteratively find valid corners (where both lines stop)
+    trimmed_lines = []
+    for i in range(len(extended_lines)):
+        source_end = line_endpoints[i]['source']
 
-            # Find nearest intersection to background end
-            nearest_intersection = None
-            min_dist = float('inf')
-            for ix, iy, j in line_intersections[i]:
-                dist = np.sqrt((ix - bg_end[0])**2 + (iy - bg_end[1])**2)
-                if dist < min_dist:
-                    min_dist = dist
-                    nearest_intersection = (ix, iy)
+        # Calculate direction
+        dir_x = line_endpoints[i]['target'][0] - source_end[0]
+        dir_y = line_endpoints[i]['target'][1] - source_end[1]
+        dir_len = np.sqrt(dir_x**2 + dir_y**2)
+        if dir_len > 0:
+            dir_x /= dir_len
+            dir_y /= dir_len
 
-            if nearest_intersection:
-                print(f"  Line {i}: One end in bg, trimming to ({nearest_intersection[0]:.1f},{nearest_intersection[1]:.1f})")
-                trimmed_lines.append((bg_end, nearest_intersection))
-            else:
-                trimmed_lines.append(line1)
+        # Find the farthest intersection where BOTH lines will stop (mutual corner)
+        best_intersection = None
+        max_param_t = -1
 
-        # Case 2: Both ends in background - create segments from BOTH directions to nearest intersections
-        elif not x1_in_wm and not x2_in_wm:
-            print(f"  Line {i}: Both ends in bg at ({x1:.1f},{y1:.1f}) and ({x2:.1f},{y2:.1f})")
+        for ix, iy, j in line_endpoints[i]['intersections']:
+            # Calculate how far along our direction this intersection is
+            dx_to_int = ix - source_end[0]
+            dy_to_int = iy - source_end[1]
+            t = dx_to_int * dir_x + dy_to_int * dir_y
 
-            # Find nearest intersection to x1 end
-            nearest_to_x1 = None
-            min_dist_x1 = float('inf')
-            for ix, iy, j in line_intersections[i]:
-                dist = np.sqrt((ix - x1)**2 + (iy - y1)**2)
-                if dist < min_dist_x1:
-                    min_dist_x1 = dist
-                    nearest_to_x1 = (ix, iy)
+            if t > 0:
+                # Check if the OTHER line (j) also has this as an intersection
+                # and whether line j will actually reach this point
+                other_line_reaches = False
+                for ox, oy, oj in line_endpoints[j]['intersections']:
+                    if abs(ox - ix) < 0.1 and abs(oy - iy) < 0.1 and oj == i:
+                        # Line j also lists this intersection with us
+                        # Check if line j will reach this point (it's the farthest for j)
+                        j_source = line_endpoints[j]['source']
+                        j_dir_x = line_endpoints[j]['target'][0] - j_source[0]
+                        j_dir_y = line_endpoints[j]['target'][1] - j_source[1]
+                        j_dir_len = np.sqrt(j_dir_x**2 + j_dir_y**2)
+                        if j_dir_len > 0:
+                            j_dir_x /= j_dir_len
+                            j_dir_y /= j_dir_len
 
-            # Find nearest intersection to x2 end
-            nearest_to_x2 = None
-            min_dist_x2 = float('inf')
-            for ix, iy, j in line_intersections[i]:
-                dist = np.sqrt((ix - x2)**2 + (iy - y2)**2)
-                if dist < min_dist_x2:
-                    min_dist_x2 = dist
-                    nearest_to_x2 = (ix, iy)
+                        j_dx = ix - j_source[0]
+                        j_dy = iy - j_source[1]
+                        j_t = j_dx * j_dir_x + j_dy * j_dir_y
 
-            # Create two segments if they're different intersections
-            if nearest_to_x1 and nearest_to_x2:
-                if nearest_to_x1 != nearest_to_x2:
-                    print(f"    -> Creating TWO segments: ({x1:.1f},{y1:.1f}) to ({nearest_to_x1[0]:.1f},{nearest_to_x1[1]:.1f}) AND ({x2:.1f},{y2:.1f}) to ({nearest_to_x2[0]:.1f},{nearest_to_x2[1]:.1f})")
-                    trimmed_lines.append(((x1, y1), nearest_to_x1))
-                    trimmed_lines.append(((x2, y2), nearest_to_x2))
-                else:
-                    # Same intersection, just create one segment from nearest end
-                    if min_dist_x1 < min_dist_x2:
-                        trimmed_lines.append(((x1, y1), nearest_to_x1))
-                    else:
-                        trimmed_lines.append(((x2, y2), nearest_to_x2))
-            elif nearest_to_x1:
-                trimmed_lines.append(((x1, y1), nearest_to_x1))
-            elif nearest_to_x2:
-                trimmed_lines.append(((x2, y2), nearest_to_x2))
-            else:
-                trimmed_lines.append(line1)
+                        # Check if this is the farthest intersection for line j as well
+                        is_farthest_for_j = True
+                        for ox2, oy2, oj2 in line_endpoints[j]['intersections']:
+                            j_dx2 = ox2 - j_source[0]
+                            j_dy2 = oy2 - j_source[1]
+                            j_t2 = j_dx2 * j_dir_x + j_dy2 * j_dir_y
+                            if j_t2 > j_t + 0.1:  # There's a farther intersection for j
+                                is_farthest_for_j = False
+                                break
 
-        # Case 3: Both ends in watermark - this shouldn't happen for lines detected in background
+                        if is_farthest_for_j and j_t > 0:
+                            other_line_reaches = True
+                            break
+
+                # Use the farthest mutual corner
+                if other_line_reaches and t > max_param_t:
+                    max_param_t = t
+                    best_intersection = (ix, iy)
+
+        if best_intersection:
+            print(f"  Line {i}: {source_end} -> {best_intersection} (mutual corner)")
+            trimmed_lines.append((source_end, best_intersection))
         else:
-            print(f"  Line {i}: WARNING - both ends in watermark!")
-            trimmed_lines.append(line1)
+            # No mutual corner found, use nearest intersection
+            min_t = float('inf')
+            nearest_int = None
+            for ix, iy, j in line_endpoints[i]['intersections']:
+                dx_to_int = ix - source_end[0]
+                dy_to_int = iy - source_end[1]
+                t = dx_to_int * dir_x + dy_to_int * dir_y
+                if t > 0 and t < min_t:
+                    min_t = t
+                    nearest_int = (ix, iy)
+
+            if nearest_int:
+                print(f"  Line {i}: {source_end} -> {nearest_int} (nearest intersection)")
+                trimmed_lines.append((source_end, nearest_int))
+            else:
+                print(f"  Line {i}: keeping full line")
+                trimmed_lines.append((source_end, line_endpoints[i]['target']))
 
     extended_lines = trimmed_lines
 else:
@@ -351,19 +368,35 @@ vis2_img = Image.fromarray(vis2).resize((100 * scale_factor, 100 * scale_factor)
 vis3_img = Image.fromarray(vis3).resize((100 * scale_factor, 100 * scale_factor), Image.NEAREST)
 
 # Now draw lines on scaled images (3-pixel wide for visibility)
+# Load font for line labels
+try:
+    label_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 30)
+except:
+    label_font = ImageFont.load_default()
+
 draw1 = ImageDraw.Draw(vis1_img)
-for (x1, y1), (x2, y2) in extended_lines:
+for idx, ((x1, y1), (x2, y2)) in enumerate(extended_lines):
     # Scale coordinates
     sx1, sy1 = x1 * scale_factor, y1 * scale_factor
     sx2, sy2 = x2 * scale_factor, y2 * scale_factor
     draw1.line([(sx1, sy1), (sx2, sy2)], fill=(0, 255, 0), width=3)
 
+    # Add line label at midpoint
+    mid_x = (sx1 + sx2) / 2
+    mid_y = (sy1 + sy2) / 2
+    draw1.text((mid_x, mid_y), f"L{idx}", fill=(255, 0, 0), font=label_font, anchor="mm")
+
 draw3 = ImageDraw.Draw(vis3_img)
-for (x1, y1), (x2, y2) in extended_lines:
+for idx, ((x1, y1), (x2, y2)) in enumerate(extended_lines):
     # Scale coordinates
     sx1, sy1 = x1 * scale_factor, y1 * scale_factor
     sx2, sy2 = x2 * scale_factor, y2 * scale_factor
     draw3.line([(sx1, sy1), (sx2, sy2)], fill=(0, 255, 0), width=3)
+
+    # Add line label at midpoint
+    mid_x = (sx1 + sx2) / 2
+    mid_y = (sy1 + sy2) / 2
+    draw3.text((mid_x, mid_y), f"L{idx}", fill=(255, 0, 0), font=label_font, anchor="mm")
 
 # Create canvas with 3 panels side by side
 canvas_width = 100 * scale_factor * 3 + 400  # 3 panels + margins

@@ -118,89 +118,108 @@ def detect_geometric_features(corner, watermark_mask):
                         line_intersections[i].append((ix, iy, extended_lines[j]))
                         line_intersections[j].append((ix, iy, extended_lines[i]))
 
-        # Trim lines at their first intersection encountered from background
-        # When both ends are in background, create segments from both directions
-        trimmed_lines = []
+        # Trim lines at intersections using mutual corner detection
+        # Store temporary line endpoints for iterative refinement
+        line_endpoints = {}
         for i, line1 in enumerate(extended_lines):
             (x1, y1), (x2, y2) = line1
+            orig_x1, orig_y1 = detected_lines[i][0]
+            orig_x2, orig_y2 = detected_lines[i][1]
+            detected_center_x = (orig_x1 + orig_x2) / 2
+            detected_center_y = (orig_y1 + orig_y2) / 2
 
-            if not line_intersections[i]:
-                trimmed_lines.append(line1)
-                continue
+            dist_x1_to_detected = np.sqrt((x1 - detected_center_x)**2 + (y1 - detected_center_y)**2)
+            dist_x2_to_detected = np.sqrt((x2 - detected_center_x)**2 + (y2 - detected_center_y)**2)
 
-            # Determine which endpoint is in background vs watermark by checking the mask
-            x1_check = int(np.clip(x1, 0, 99))
-            y1_check = int(np.clip(y1, 0, 99))
-            x2_check = int(np.clip(x2, 0, 99))
-            y2_check = int(np.clip(y2, 0, 99))
+            source_end = (x1, y1) if dist_x1_to_detected < dist_x2_to_detected else (x2, y2)
+            other_end = (x2, y2) if dist_x1_to_detected < dist_x2_to_detected else (x1, y1)
 
-            x1_in_wm = watermark_mask[y1_check, x1_check]
-            x2_in_wm = watermark_mask[y2_check, x2_check]
+            line_endpoints[i] = {'source': source_end, 'target': other_end, 'intersections': line_intersections[i]}
 
-            # Case 1: One end in background, one in watermark
-            if (not x1_in_wm and x2_in_wm) or (x1_in_wm and not x2_in_wm):
-                bg_end = (x1, y1) if not x1_in_wm else (x2, y2)
+        # Find valid corners (where both lines stop) - mutual corners
+        trimmed_lines = []
+        for i in range(len(extended_lines)):
+            source_end = line_endpoints[i]['source']
 
-                # Find nearest intersection to background end
-                nearest_intersection = None
-                min_dist = float('inf')
-                for ix, iy, other_line in line_intersections[i]:
-                    dist = np.sqrt((ix - bg_end[0])**2 + (iy - bg_end[1])**2)
-                    if dist < min_dist:
-                        min_dist = dist
-                        nearest_intersection = (ix, iy)
+            # Calculate direction
+            dir_x = line_endpoints[i]['target'][0] - source_end[0]
+            dir_y = line_endpoints[i]['target'][1] - source_end[1]
+            dir_len = np.sqrt(dir_x**2 + dir_y**2)
+            if dir_len > 0:
+                dir_x /= dir_len
+                dir_y /= dir_len
 
-                if nearest_intersection:
-                    trimmed_lines.append((bg_end, nearest_intersection))
-                else:
-                    trimmed_lines.append(line1)
+            # Find the farthest intersection where BOTH lines will stop (mutual corner)
+            best_intersection = None
+            max_param_t = -1
 
-            # Case 2: Both ends in background - create segments from BOTH directions
-            elif not x1_in_wm and not x2_in_wm:
-                # Find nearest intersection to x1 end
-                nearest_to_x1 = None
-                min_dist_x1 = float('inf')
-                for ix, iy, other_line in line_intersections[i]:
-                    dist = np.sqrt((ix - x1)**2 + (iy - y1)**2)
-                    if dist < min_dist_x1:
-                        min_dist_x1 = dist
-                        nearest_to_x1 = (ix, iy)
+            for ix, iy, j in line_endpoints[i]['intersections']:
+                dx_to_int = ix - source_end[0]
+                dy_to_int = iy - source_end[1]
+                t = dx_to_int * dir_x + dy_to_int * dir_y
 
-                # Find nearest intersection to x2 end
-                nearest_to_x2 = None
-                min_dist_x2 = float('inf')
-                for ix, iy, other_line in line_intersections[i]:
-                    dist = np.sqrt((ix - x2)**2 + (iy - y2)**2)
-                    if dist < min_dist_x2:
-                        min_dist_x2 = dist
-                        nearest_to_x2 = (ix, iy)
+                if t > 0:
+                    # Check if the OTHER line (j) will also reach this point
+                    other_line_reaches = False
+                    for ox, oy, oj in line_endpoints[j]['intersections']:
+                        if abs(ox - ix) < 0.1 and abs(oy - iy) < 0.1 and oj == i:
+                            j_source = line_endpoints[j]['source']
+                            j_dir_x = line_endpoints[j]['target'][0] - j_source[0]
+                            j_dir_y = line_endpoints[j]['target'][1] - j_source[1]
+                            j_dir_len = np.sqrt(j_dir_x**2 + j_dir_y**2)
+                            if j_dir_len > 0:
+                                j_dir_x /= j_dir_len
+                                j_dir_y /= j_dir_len
 
-                # Create two segments if they're different intersections
-                if nearest_to_x1 and nearest_to_x2:
-                    if nearest_to_x1 != nearest_to_x2:
-                        trimmed_lines.append(((x1, y1), nearest_to_x1))
-                        trimmed_lines.append(((x2, y2), nearest_to_x2))
-                    else:
-                        # Same intersection, just create one segment from nearest end
-                        if min_dist_x1 < min_dist_x2:
-                            trimmed_lines.append(((x1, y1), nearest_to_x1))
-                        else:
-                            trimmed_lines.append(((x2, y2), nearest_to_x2))
-                elif nearest_to_x1:
-                    trimmed_lines.append(((x1, y1), nearest_to_x1))
-                elif nearest_to_x2:
-                    trimmed_lines.append(((x2, y2), nearest_to_x2))
-                else:
-                    trimmed_lines.append(line1)
+                            j_dx = ix - j_source[0]
+                            j_dy = iy - j_source[1]
+                            j_t = j_dx * j_dir_x + j_dy * j_dir_y
 
-            # Case 3: Both ends in watermark
+                            # Check if this is the farthest intersection for line j
+                            is_farthest_for_j = True
+                            for ox2, oy2, oj2 in line_endpoints[j]['intersections']:
+                                j_dx2 = ox2 - j_source[0]
+                                j_dy2 = oy2 - j_source[1]
+                                j_t2 = j_dx2 * j_dir_x + j_dy2 * j_dir_y
+                                if j_t2 > j_t + 0.1:
+                                    is_farthest_for_j = False
+                                    break
+
+                            if is_farthest_for_j and j_t > 0:
+                                other_line_reaches = True
+                                break
+
+                    # Use the farthest mutual corner
+                    if other_line_reaches and t > max_param_t:
+                        max_param_t = t
+                        best_intersection = (ix, iy)
+
+            if best_intersection:
+                trimmed_lines.append((source_end, best_intersection))
             else:
-                trimmed_lines.append(line1)
+                # No mutual corner, use nearest intersection
+                min_t = float('inf')
+                nearest_int = None
+                for ix, iy, j in line_endpoints[i]['intersections']:
+                    dx_to_int = ix - source_end[0]
+                    dy_to_int = iy - source_end[1]
+                    t = dx_to_int * dir_x + dy_to_int * dir_y
+                    if t > 0 and t < min_t:
+                        min_t = t
+                        nearest_int = (ix, iy)
+
+                if nearest_int:
+                    trimmed_lines.append((source_end, nearest_int))
+                else:
+                    trimmed_lines.append((source_end, line_endpoints[i]['target']))
 
         return trimmed_lines if trimmed_lines else None
 
     except Exception as e:
         # If geometric detection fails for any reason, return None
+        print(f"WARNING: Geometry detection failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -620,9 +639,9 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     if merged_thin:
         print(f'After merging {len(merged_thin)} thin/small segments: {len(segment_info)} segments')
 
-    # Assign all unassigned watermark pixels using radial/geometric projection
-    # This respects the natural geometric flow of the background into the watermark
-    # instead of simple nearest-neighbor distance
+    # Assign all unassigned watermark pixels using region-based assignment with line boundaries
+    # Lines divide the watermark into regions, and pixels are assigned based on the
+    # predominant segment in their region
     watermark_mask = (template > 0.005)  # All watermark pixels (core + edge)
     unassigned_mask = watermark_mask & (segments == -1)
     unassigned_count = np.sum(unassigned_mask)
@@ -631,102 +650,76 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         # Detect geometric features (lines) in the background
         detected_lines = detect_geometric_features(corner, watermark_mask)
 
-        # Helper function to check if a ray crosses a line
-        def ray_crosses_line(center_x, center_y, px, py, line):
-            """Check if ray from center through (px, py) crosses the given line."""
+        # Helper function to check which side of a line a point is on
+        def point_side_of_line(px, py, line):
+            """Return which side of the line the point is on.
+            Returns: positive = one side, negative = other side, 0 = on line"""
             (x1, y1), (x2, y2) = line
+            # Cross product: (p - p1) × (p2 - p1)
+            return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-            # Ray direction
-            ray_dx = px - center_x
-            ray_dy = py - center_y
+        # Helper function to check if two points are separated by any line
+        def points_separated_by_lines(p1x, p1y, p2x, p2y, lines):
+            """Check if two points are on opposite sides of any line."""
+            if not lines:
+                return False
 
-            # Line direction
-            line_dx = x2 - x1
-            line_dy = y2 - y1
+            for line in lines:
+                side1 = point_side_of_line(p1x, p1y, line)
+                side2 = point_side_of_line(p2x, p2y, line)
 
-            # Solve for intersection using parametric equations
-            # Ray: (center_x + t*ray_dx, center_y + t*ray_dy) for t >= 0
-            # Line: (x1 + s*line_dx, y1 + s*line_dy) for 0 <= s <= 1
+                # If signs are opposite (and neither is zero), they're separated
+                if (side1 > 0 and side2 < 0) or (side1 < 0 and side2 > 0):
+                    return True
 
-            denom = ray_dx * line_dy - ray_dy * line_dx
-            if abs(denom) < 1e-10:  # Parallel
-                return None
-
-            # Solve for s (position along line)
-            s = ((center_x - x1) * ray_dy - (center_y - y1) * ray_dx) / denom
-
-            # Solve for t (position along ray)
-            if abs(ray_dx) > abs(ray_dy):
-                t = (x1 + s * line_dx - center_x) / ray_dx
-            else:
-                t = (y1 + s * line_dy - center_y) / ray_dy
-
-            # Check if intersection is valid
-            if 0 <= s <= 1 and t >= 1.0:  # Line segment intersected, beyond pixel
-                cross_x = x1 + s * line_dx
-                cross_y = y1 + s * line_dy
-                return (cross_x, cross_y, t)
-
-            return None
-
-        # Find watermark center for radial projection
-        wm_coords = np.argwhere(watermark_mask)
-        center_y, center_x = np.mean(wm_coords, axis=0)
+            return False
 
         # Get coordinates of unassigned pixels
         unassigned_coords = np.argwhere(unassigned_mask)
 
-        # For each unassigned pixel, use radial projection to find its segment
+        # Get coordinates of all assigned segment pixels
+        assigned_mask = watermark_mask & (segments != -1)
+        assigned_coords = np.argwhere(assigned_mask)
+        assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
+
+        # For each unassigned pixel, find assigned pixels in the same region
         for uy, ux in unassigned_coords:
-            # Calculate angle from center to this pixel
-            dy, dx = uy - center_y, ux - center_x
-            angle = np.arctan2(dy, dx)
+            # Find all assigned pixels that are NOT separated by any line
+            same_region_mask = []
+            same_region_segments = []
 
-            # If we have detected lines, check if the ray crosses any
-            max_dist_mult = 2.0  # Default maximum distance multiplier
-            if detected_lines:
-                nearest_crossing_t = None
-                for line in detected_lines:
-                    crossing = ray_crosses_line(center_x, center_y, ux, uy, line)
-                    if crossing:
-                        cross_x, cross_y, t = crossing
-                        if nearest_crossing_t is None or t < nearest_crossing_t:
-                            nearest_crossing_t = t
+            for i, (ay, ax) in enumerate(assigned_coords):
+                if detected_lines:
+                    separated = points_separated_by_lines(ux, uy, ax, ay, detected_lines)
+                    if not separated:
+                        same_region_mask.append(i)
+                        same_region_segments.append(assigned_ids[i])
+                else:
+                    same_region_mask.append(i)
+                    same_region_segments.append(assigned_ids[i])
 
-                # If we cross a line, limit sampling to just before the crossing
-                if nearest_crossing_t is not None:
-                    max_dist_mult = min(max_dist_mult, nearest_crossing_t * 0.95)
+            # If we found pixels in the same region, use majority vote
+            if same_region_segments:
+                # Find the most common segment among reachable pixels
+                # Weight by inverse distance
+                same_region_coords = assigned_coords[same_region_mask]
+                distances = np.sqrt((same_region_coords[:, 0] - uy)**2 +
+                                   (same_region_coords[:, 1] - ux)**2)
 
-            # Cast ray outward from center through this pixel
-            # Sample multiple points along the ray to find assigned segments
-            max_dist = np.sqrt((template.shape[0]/2)**2 + (template.shape[1]/2)**2)
+                # Count segments with distance weighting
+                segment_scores = {}
+                for seg_id, dist in zip(same_region_segments, distances):
+                    weight = 1.0 / (dist + 1.0)  # Add 1 to avoid division by zero
+                    segment_scores[seg_id] = segment_scores.get(seg_id, 0) + weight
 
-            # Sample along the ray from current pixel outward to boundary (or line crossing)
-            best_segment = None
-            for dist_mult in np.linspace(1.1, max_dist_mult, 20):  # Sample beyond current pixel
-                sample_y = int(center_y + dy * dist_mult)
-                sample_x = int(center_x + dx * dist_mult)
-
-                # Check if sample point is in bounds
-                if 0 <= sample_y < segments.shape[0] and 0 <= sample_x < segments.shape[1]:
-                    sample_seg = segments[sample_y, sample_x]
-                    if sample_seg != -1:  # Found an assigned segment
-                        best_segment = sample_seg
-                        break
-
-            # If radial projection didn't find anything, fall back to nearest neighbor
-            if best_segment is None:
-                # Get coordinates of all assigned segment pixels
-                assigned_mask = watermark_mask & (segments != -1)
-                assigned_coords = np.argwhere(assigned_mask)
-                assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
-
-                # Find nearest assigned pixel
+                # Choose segment with highest score
+                best_segment = max(segment_scores.keys(), key=lambda k: segment_scores[k])
+                segments[uy, ux] = best_segment
+            else:
+                # Fallback: no pixels in same region, use nearest neighbor
                 distances = np.sqrt((assigned_coords[:, 0] - uy)**2 + (assigned_coords[:, 1] - ux)**2)
                 nearest_idx = np.argmin(distances)
-                best_segment = assigned_ids[nearest_idx]
-
-            segments[uy, ux] = best_segment
+                segments[uy, ux] = assigned_ids[nearest_idx]
 
         # Update segment_info sizes and masks
         for info in segment_info:
@@ -734,10 +727,10 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             info['mask'] = (segments == seg_id)
             info['size'] = np.sum(info['mask'])
 
-        method = 'geometry-aware radial projection' if detected_lines else 'radial projection'
+        method = 'region-based assignment with line boundaries' if detected_lines else 'nearest neighbor'
         print(f'Assigned {unassigned_count} unassigned pixels using {method}')
         if detected_lines:
-            print(f'  Used {len(detected_lines)} detected geometric boundaries')
+            print(f'  Used {len(detected_lines)} detected geometric boundaries as region dividers')
 
     return {
         'segments': segments,
