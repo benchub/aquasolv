@@ -426,6 +426,37 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     if merged_thin:
         print(f'After merging {len(merged_thin)} thin/small segments: {len(segment_info)} segments')
 
+    # Assign all unassigned watermark pixels to their nearest segment
+    # This ensures every pixel gets a segment assignment based on geometric proximity
+    # instead of trying to guess colors later through blending
+    watermark_mask = (template > 0.005)  # All watermark pixels (core + edge)
+    unassigned_mask = watermark_mask & (segments == -1)
+    unassigned_count = np.sum(unassigned_mask)
+
+    if unassigned_count > 0:
+        # Get coordinates of unassigned pixels
+        unassigned_coords = np.argwhere(unassigned_mask)
+
+        # Get coordinates of all assigned segment pixels
+        assigned_mask = watermark_mask & (segments != -1)
+        assigned_coords = np.argwhere(assigned_mask)
+        assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
+
+        # For each unassigned pixel, find nearest assigned pixel and copy its segment
+        for uy, ux in unassigned_coords:
+            # Calculate distances to all assigned pixels
+            distances = np.sqrt((assigned_coords[:, 0] - uy)**2 + (assigned_coords[:, 1] - ux)**2)
+            nearest_idx = np.argmin(distances)
+            segments[uy, ux] = assigned_ids[nearest_idx]
+
+        # Update segment_info sizes and masks
+        for info in segment_info:
+            seg_id = info['id']
+            info['mask'] = (segments == seg_id)
+            info['size'] = np.sum(info['mask'])
+
+        print(f'Assigned {unassigned_count} unassigned pixels to nearest segments')
+
     return {
         'segments': segments,
         'segment_info': segment_info,
