@@ -363,7 +363,69 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         print(f'After merging {len(merged_small)} small interior segments: {len(segment_info)} segments')
     else:
         print(f'No small interior segments to merge (still {len(segment_info)} segments)')
-    
+
+    # Merge thin/sliver segments that create isolated pixel noise
+    # These are typically 1-2 pixels wide but may span many rows/columns
+    # They create visible artifacts when filled with slightly different colors
+    THIN_SEGMENT_SIZE_THRESHOLD = 20  # Very small segments
+    THIN_SEGMENT_ASPECT_RATIO = 5.0   # High aspect ratio (width/height or vice versa)
+
+    merged_thin = []
+    for info in segment_info[:]:  # Iterate over copy since we modify list
+        seg_id = info['id']
+        seg_mask = info['mask']
+        seg_size = info['size']
+
+        # Calculate bounding box to detect thin segments
+        coords = np.argwhere(seg_mask)
+        if len(coords) == 0:
+            continue
+
+        y_coords, x_coords = coords[:, 0], coords[:, 1]
+        bbox_height = y_coords.max() - y_coords.min() + 1
+        bbox_width = x_coords.max() - x_coords.min() + 1
+
+        # Calculate aspect ratio (always >= 1)
+        if bbox_width > 0 and bbox_height > 0:
+            aspect_ratio = max(bbox_width / bbox_height, bbox_height / bbox_width)
+        else:
+            aspect_ratio = 1.0
+
+        # Check if segment is thin (high aspect ratio) or very small
+        is_thin = aspect_ratio > THIN_SEGMENT_ASPECT_RATIO
+        is_very_small = seg_size < THIN_SEGMENT_SIZE_THRESHOLD
+
+        if is_thin or is_very_small:
+            # Find adjacent segments
+            dilated = binary_dilation(seg_mask, iterations=1)
+            adjacent_region = dilated & ~seg_mask & (segments >= 0)
+            adjacent_segs = np.unique(segments[adjacent_region])
+
+            if len(adjacent_segs) > 0:
+                # Merge into largest adjacent neighbor
+                segment_sizes = {s['id']: s['size'] for s in segment_info}
+                largest_neighbor = max(adjacent_segs, key=lambda s: segment_sizes.get(s, 0))
+
+                # Perform merge
+                segments[seg_mask] = largest_neighbor
+                merged_thin.append((seg_id, largest_neighbor, seg_size, aspect_ratio))
+
+                # Update neighbor's info
+                for other_info in segment_info:
+                    if other_info['id'] == largest_neighbor:
+                        other_info['size'] += seg_size
+                        other_info['mask'] = (segments == largest_neighbor)
+
+                reason = 'thin' if is_thin else 'small'
+                print(f"  Merged {reason} segment {seg_id} ({seg_size}px, aspect={aspect_ratio:.1f}) into segment {largest_neighbor}")
+
+    # Remove merged segments from segment_info
+    merged_thin_ids = set(m[0] for m in merged_thin)
+    segment_info = [info for info in segment_info if info['id'] not in merged_thin_ids]
+
+    if merged_thin:
+        print(f'After merging {len(merged_thin)} thin/small segments: {len(segment_info)} segments')
+
     return {
         'segments': segments,
         'segment_info': segment_info,
