@@ -426,28 +426,57 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     if merged_thin:
         print(f'After merging {len(merged_thin)} thin/small segments: {len(segment_info)} segments')
 
-    # Assign all unassigned watermark pixels to their nearest segment
-    # This ensures every pixel gets a segment assignment based on geometric proximity
-    # instead of trying to guess colors later through blending
+    # Assign all unassigned watermark pixels using radial/geometric projection
+    # This respects the natural geometric flow of the background into the watermark
+    # instead of simple nearest-neighbor distance
     watermark_mask = (template > 0.005)  # All watermark pixels (core + edge)
     unassigned_mask = watermark_mask & (segments == -1)
     unassigned_count = np.sum(unassigned_mask)
 
     if unassigned_count > 0:
+        # Find watermark center for radial projection
+        wm_coords = np.argwhere(watermark_mask)
+        center_y, center_x = np.mean(wm_coords, axis=0)
+
         # Get coordinates of unassigned pixels
         unassigned_coords = np.argwhere(unassigned_mask)
 
-        # Get coordinates of all assigned segment pixels
-        assigned_mask = watermark_mask & (segments != -1)
-        assigned_coords = np.argwhere(assigned_mask)
-        assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
-
-        # For each unassigned pixel, find nearest assigned pixel and copy its segment
+        # For each unassigned pixel, use radial projection to find its segment
         for uy, ux in unassigned_coords:
-            # Calculate distances to all assigned pixels
-            distances = np.sqrt((assigned_coords[:, 0] - uy)**2 + (assigned_coords[:, 1] - ux)**2)
-            nearest_idx = np.argmin(distances)
-            segments[uy, ux] = assigned_ids[nearest_idx]
+            # Calculate angle from center to this pixel
+            dy, dx = uy - center_y, ux - center_x
+            angle = np.arctan2(dy, dx)
+
+            # Cast ray outward from center through this pixel
+            # Sample multiple points along the ray to find assigned segments
+            max_dist = np.sqrt((template.shape[0]/2)**2 + (template.shape[1]/2)**2)
+
+            # Sample along the ray from current pixel outward to boundary
+            best_segment = None
+            for dist_mult in np.linspace(1.1, 2.0, 20):  # Sample beyond current pixel
+                sample_y = int(center_y + dy * dist_mult)
+                sample_x = int(center_x + dx * dist_mult)
+
+                # Check if sample point is in bounds
+                if 0 <= sample_y < segments.shape[0] and 0 <= sample_x < segments.shape[1]:
+                    sample_seg = segments[sample_y, sample_x]
+                    if sample_seg != -1:  # Found an assigned segment
+                        best_segment = sample_seg
+                        break
+
+            # If radial projection didn't find anything, fall back to nearest neighbor
+            if best_segment is None:
+                # Get coordinates of all assigned segment pixels
+                assigned_mask = watermark_mask & (segments != -1)
+                assigned_coords = np.argwhere(assigned_mask)
+                assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
+
+                # Find nearest assigned pixel
+                distances = np.sqrt((assigned_coords[:, 0] - uy)**2 + (assigned_coords[:, 1] - ux)**2)
+                nearest_idx = np.argmin(distances)
+                best_segment = assigned_ids[nearest_idx]
+
+            segments[uy, ux] = best_segment
 
         # Update segment_info sizes and masks
         for info in segment_info:
@@ -455,7 +484,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             info['mask'] = (segments == seg_id)
             info['size'] = np.sum(info['mask'])
 
-        print(f'Assigned {unassigned_count} unassigned pixels to nearest segments')
+        print(f'Assigned {unassigned_count} unassigned pixels using radial projection')
 
     return {
         'segments': segments,
