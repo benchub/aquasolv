@@ -115,8 +115,8 @@ def detect_geometric_features(corner, watermark_mask):
                 if intersection:
                     ix, iy = intersection
                     if watermark_mask[int(iy), int(ix)]:
-                        line_intersections[i].append((ix, iy, extended_lines[j]))
-                        line_intersections[j].append((ix, iy, extended_lines[i]))
+                        line_intersections[i].append((ix, iy, j))
+                        line_intersections[j].append((ix, iy, i))
 
         # Trim lines at intersections using mutual corner detection
         # Store temporary line endpoints for iterative refinement
