@@ -290,8 +290,14 @@ def segmented_inpaint_watermark(img_array, template_mask):
     # We need original colors to match visualize_segments.py
     corner_original = corner.copy()
 
+    # DEBUG: Verify corner_original is truly original
+    print(f"  DEBUG: corner_original min={np.min(corner_original)}, max={np.max(corner_original)}, mean={np.mean(corner_original):.1f}")
+    print(f"  DEBUG: corner_original[20,20]={corner_original[20,20]}")
+
     # Pre-sharpen the corner to reduce antialiasing and make watermark edges crisper
-    # This helps segmentation by making color boundaries more distinct
+    # NOTE: Sharpening can contaminate black borders, making them appear brighter
+    # This causes outlier filtering to incorrectly discard dark pixels
+    # SOLUTION: Run segmentation on ORIGINAL unsharpened corner (like visualize_segments.py)
     from scipy.ndimage import gaussian_filter
     corner_float = corner.astype(float)
     blurred = np.stack([gaussian_filter(corner_float[:,:,i], sigma=0.5) for i in range(3)], axis=2)
@@ -299,10 +305,12 @@ def segmented_inpaint_watermark(img_array, template_mask):
     corner = np.clip(sharpened, 0, 255).astype(np.uint8)
 
     # Step 1: Find distinct uniform color regions within the watermark using shared segmentation logic
-    # Lowered from 0.15 to 0.05 to capture more anti-aliased halo pixels in segments
+    # Use 0.15 to match visualize_segments.py (which gets correct black border segmentation)
+    # Lower values (0.05) include more edge pixels, which contaminates segmentation
     # Using auto quantization for adaptive color distinction
-    core_threshold = 0.05
-    seg_result = find_segments(corner, template_mask, core_threshold=core_threshold)
+    # IMPORTANT: Use corner_original (not sharpened corner) to avoid contamination from sharpening
+    core_threshold = 0.15
+    seg_result = find_segments(corner_original, template_mask, core_threshold=core_threshold)
     segments = seg_result['segments']
     segment_info = seg_result['segment_info']
     core_mask = seg_result['core_mask']
@@ -356,24 +364,25 @@ def segmented_inpaint_watermark(img_array, template_mask):
     # Find where the watermark core ends (not the dilated boundary, but the actual watermark pixels)
     watermark_core_edge = core_mask & ~binary_dilation(~core_mask, iterations=1)
 
-    # CRITICAL: Assign unassigned core pixels to nearest segment
-    # Some pixels in core_mask may have segment = -1 (unassigned)
-    # These create artifacts if left unfilled
-    unassigned_core = core_mask & (segments == -1)
-    if np.any(unassigned_core):
-        print(f"  Found {np.sum(unassigned_core)} unassigned core pixels, assigning to nearest segments")
-        unassigned_coords = np.argwhere(unassigned_core)
-
-        # Get all assigned segment coordinates
-        assigned_core = core_mask & (segments != -1)
-        assigned_coords = np.argwhere(assigned_core)
-        assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
-
-        # For each unassigned pixel, find nearest assigned pixel
-        for uy, ux in unassigned_coords:
-            distances = np.sqrt((assigned_coords[:, 0] - uy)**2 + (assigned_coords[:, 1] - ux)**2)
-            nearest_idx = np.argmin(distances)
-            segments[uy, ux] = assigned_ids[nearest_idx]
+    # DISABLED: Assign unassigned core pixels to nearest segment
+    # This was contaminating segments by adding extra pixels, causing outlier filtering
+    # to make wrong decisions. visualize_segments.py doesn't do this and gets correct results.
+    # Leaving unassigned pixels unfilled is better than assigning them to wrong segments.
+    # unassigned_core = core_mask & (segments == -1)
+    # if np.any(unassigned_core):
+    #     print(f"  Found {np.sum(unassigned_core)} unassigned core pixels, assigning to nearest segments")
+    #     unassigned_coords = np.argwhere(unassigned_core)
+    #
+    #     # Get all assigned segment coordinates
+    #     assigned_core = core_mask & (segments != -1)
+    #     assigned_coords = np.argwhere(assigned_core)
+    #     assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
+    #
+    #     # For each unassigned pixel, find nearest assigned pixel
+    #     for uy, ux in unassigned_coords:
+    #         distances = np.sqrt((assigned_coords[:, 0] - uy)**2 + (assigned_coords[:, 1] - ux)**2)
+    #         nearest_idx = np.argmin(distances)
+    #         segments[uy, ux] = assigned_ids[nearest_idx]
 
     # Compute boundary pixel contention map
     # Pixels reachable by multiple segments are less reliable for sampling
