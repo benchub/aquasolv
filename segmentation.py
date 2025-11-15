@@ -626,8 +626,21 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             dilated = binary_dilation(seg_mask, iterations=1)
             adjacent_region = dilated & ~seg_mask & (segments >= 0)
             adjacent_segs = np.unique(segments[adjacent_region])
-            
+
             if len(adjacent_segs) > 0:
+                # Filter out adjacent segments separated by geometric boundaries
+                if detected_lines:
+                    valid_neighbors = []
+                    for neighbor_id in adjacent_segs:
+                        neighbor_info = next((s for s in segment_info if s['id'] == neighbor_id), None)
+                        if neighbor_info:
+                            if not segments_separated_by_geometry(info, neighbor_info, detected_lines):
+                                valid_neighbors.append(neighbor_id)
+                    # Skip merge if all neighbors are separated by geometric boundaries
+                    if not valid_neighbors:
+                        continue
+                    adjacent_segs = valid_neighbors
+
                 largest_neighbor = max(adjacent_segs, key=lambda s: segment_sizes.get(s, 0))
                 segments[seg_mask] = largest_neighbor
                 merged_small.append((seg_id, largest_neighbor, segment_sizes[seg_id]))
@@ -686,6 +699,19 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             adjacent_segs = np.unique(segments[adjacent_region])
 
             if len(adjacent_segs) > 0:
+                # Filter out adjacent segments separated by geometric boundaries
+                if detected_lines:
+                    valid_neighbors = []
+                    for neighbor_id in adjacent_segs:
+                        neighbor_info = next((s for s in segment_info if s['id'] == neighbor_id), None)
+                        if neighbor_info:
+                            if not segments_separated_by_geometry(info, neighbor_info, detected_lines):
+                                valid_neighbors.append(neighbor_id)
+                    # Skip merge if all neighbors are separated by geometric boundaries
+                    if not valid_neighbors:
+                        continue
+                    adjacent_segs = valid_neighbors
+
                 # Merge into largest adjacent neighbor
                 segment_sizes = {s['id']: s['size'] for s in segment_info}
                 largest_neighbor = max(adjacent_segs, key=lambda s: segment_sizes.get(s, 0))
