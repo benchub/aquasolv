@@ -510,45 +510,89 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         if segment_spans_line(info1, lines) or segment_spans_line(info2, lines):
             return True
 
-        # For each line, check if it separates the segments
-        for line in lines:
+        # Check if MERGING these segments would create a segment that spans a line
+        # This is critical: even if neither segment currently spans a line,
+        # if they're on opposite sides, merging them WOULD create a spanning segment
+
+        # Debug: track if we even check (disabled by default)
+        debug_geometry = False
+        if debug_geometry and len(lines) > 0:
+            print(f'    Checking if merge of seg {info1["id"]} ({np.sum(info1["mask"])}px) + seg {info2["id"]} ({np.sum(info2["mask"])}px) would span {len(lines)} lines')
+
+        for line_idx, line in enumerate(lines):
             (x1, y1), (x2, y2) = line
 
-            # Sample pixels from each segment to check which side they're on
+            # Get pixel coordinates from both segments
             mask1 = info1['mask']
             mask2 = info2['mask']
-
-            # Get pixel coordinates
             pixels1_y, pixels1_x = np.where(mask1)
             pixels2_y, pixels2_x = np.where(mask2)
 
-            # Sample up to 50 pixels from each segment for efficiency
-            if len(pixels1_x) > 50:
-                indices = np.random.choice(len(pixels1_x), 50, replace=False)
-                pixels1_y = pixels1_y[indices]
-                pixels1_x = pixels1_x[indices]
-            if len(pixels2_x) > 50:
-                indices = np.random.choice(len(pixels2_x), 50, replace=False)
-                pixels2_y = pixels2_y[indices]
-                pixels2_x = pixels2_x[indices]
+            # For small segments, check all pixels. For large, use stratified sampling
+            # that includes extremes to ensure we detect spanning
+            sample_size = 100
 
-            # Calculate which side of the line the pixels are on
-            sides1 = set()
-            for py, px in zip(pixels1_y, pixels1_x):
+            def stratified_sample(pix_y, pix_x, n):
+                """Sample pixels including extremes to detect boundary spanning."""
+                if len(pix_x) <= n:
+                    return pix_y, pix_x
+
+                # Always include extremes (min/max x and y)
+                extremes_idx = []
+                extremes_idx.append(np.argmin(pix_x))
+                extremes_idx.append(np.argmax(pix_x))
+                extremes_idx.append(np.argmin(pix_y))
+                extremes_idx.append(np.argmax(pix_y))
+                extremes_idx = list(set(extremes_idx))  # Remove duplicates
+
+                # Random sample the rest
+                remaining = n - len(extremes_idx)
+                if remaining > 0:
+                    mask = np.ones(len(pix_x), dtype=bool)
+                    mask[extremes_idx] = False
+                    remaining_idx = np.where(mask)[0]
+                    if len(remaining_idx) > remaining:
+                        sampled_idx = np.random.choice(remaining_idx, remaining, replace=False)
+                        all_idx = np.concatenate([extremes_idx, sampled_idx])
+                    else:
+                        all_idx = np.arange(len(pix_x))
+                else:
+                    all_idx = extremes_idx
+
+                return pix_y[all_idx], pix_x[all_idx]
+
+            pixels1_y, pixels1_x = stratified_sample(pixels1_y, pixels1_x, sample_size)
+            pixels2_y, pixels2_x = stratified_sample(pixels2_y, pixels2_x, sample_size)
+
+            # Combine pixels to simulate the merged segment
+            combined_y = np.concatenate([pixels1_y, pixels2_y])
+            combined_x = np.concatenate([pixels1_x, pixels2_x])
+
+            # Check if the combined (merged) segment would span this line
+            sides = set()
+            cross_values = []  # For debugging
+            for py, px in zip(combined_y, combined_x):
                 cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
                 if abs(cross) > 1.0:  # Not on the line
-                    sides1.add(1 if cross > 0 else -1)
+                    sides.add(1 if cross > 0 else -1)
+                    if len(cross_values) < 5:  # Store first few for debug
+                        cross_values.append(cross)
 
-            sides2 = set()
-            for py, px in zip(pixels2_y, pixels2_x):
-                cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-                if abs(cross) > 1.0:  # Not on the line
-                    sides2.add(1 if cross > 0 else -1)
+            # Debug: show what we found for this line (disabled by default)
+            if debug_geometry:
+                if len(sides) == 1:
+                    # Show coordinate ranges to understand why we're not detecting spanning
+                    min_x, max_x = np.min(combined_x), np.max(combined_x)
+                    min_y, max_y = np.min(combined_y), np.max(combined_y)
+                    print(f'      Line {line_idx} ({x1},{y1})->({x2},{y2}): sides={sides}, coords: x[{min_x},{max_x}] y[{min_y},{max_y}]')
+                else:
+                    print(f'      Line {line_idx} ({x1},{y1})->({x2},{y2}): sides={sides}, sample_cross={cross_values[:3]}')
 
-            # If segments are on opposite sides (no overlap in side sets), they're separated
-            if len(sides1) > 0 and len(sides2) > 0:
-                if len(sides1 & sides2) == 0:  # No common sides
-                    return True
+            # If the merged segment would have pixels on both sides, prevent the merge
+            if len(sides) > 1:
+                if debug_geometry:
+                    print(f'    Preventing merge of seg {info1["id"]} + seg {info2["id"]}: would span line {line_idx} (sides={sides})')
+                return True
 
         return False
 
@@ -603,14 +647,20 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                         # Find which group this segment belongs to
                         found_group = False
                         for group in merge_groups:
-                            # Check if this segment is NOT separated from any segment in the group
-                            can_merge_with_group = True
-                            for other_seg_id in group:
-                                other_info = next(i for i in segment_info if i['id'] == other_seg_id)
-                                if segments_separated_by_geometry(info, other_info, detected_lines):
-                                    can_merge_with_group = False
-                                    break
-                            if can_merge_with_group:
+                            # Check if adding this segment to the group would create a combined
+                            # group that spans geometric boundaries
+                            # Collect all segments in the group
+                            group_infos = [next(i for i in segment_info if i['id'] == gid) for gid in group]
+
+                            # Create combined mask for the entire group
+                            group_mask = np.zeros_like(group_infos[0]['mask'], dtype=bool)
+                            for ginfo in group_infos:
+                                group_mask |= ginfo['mask']
+
+                            group_combined_info = {'id': f"group_{group[0]}", 'mask': group_mask}
+
+                            # Check if adding seg_id to this group would span lines
+                            if not segments_separated_by_geometry(group_combined_info, info, detected_lines):
                                 group.append(seg_id)
                                 found_group = True
                                 break
@@ -736,12 +786,33 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                                 skip_merge = True
 
                 # Check if segments are separated by geometric boundaries
+                # This check applies to ALL images, not just low-variance ones
                 if not skip_merge and detected_lines:
-                    info1 = next((i for i in segment_info if i['id'] == seg1), None)
-                    info2 = next((i for i in segment_info if i['id'] == seg2), None)
-                    if info1 and info2:
-                        if segments_separated_by_geometry(info1, info2, detected_lines):
+                    # CRITICAL: Check the MERGED GROUPS (root1 and root2), not just seg1 and seg2
+                    # Collect all segments that belong to root1 and root2
+                    group1_segments = [i for i in segment_info if find_root(i['id']) == root1]
+                    group2_segments = [i for i in segment_info if find_root(i['id']) == root2]
+
+                    if group1_segments and group2_segments:
+                        # Create combined info for each group by merging all masks
+                        group1_mask = np.zeros_like(group1_segments[0]['mask'], dtype=bool)
+                        for seg_info in group1_segments:
+                            group1_mask |= seg_info['mask']
+
+                        group2_mask = np.zeros_like(group2_segments[0]['mask'], dtype=bool)
+                        for seg_info in group2_segments:
+                            group2_mask |= seg_info['mask']
+
+                        # Create temporary info objects for the merged groups
+                        group1_info = {'id': root1, 'mask': group1_mask}
+                        group2_info = {'id': root2, 'mask': group2_mask}
+
+                        if segments_separated_by_geometry(group1_info, group2_info, detected_lines):
                             skip_merge = True
+                elif not skip_merge:
+                    pass  # No detected_lines to check
+                else:
+                    pass  # skip_merge already True
 
                 if not skip_merge:
                     # Check if merging would create too large a color span
@@ -999,16 +1070,44 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                 best_segment = max(segment_scores.keys(), key=lambda k: segment_scores[k])
                 segments[uy, ux] = best_segment
             else:
-                # Fallback: no pixels in same region, use nearest neighbor
-                distances = np.sqrt((assigned_coords[:, 0] - uy)**2 + (assigned_coords[:, 1] - ux)**2)
-                nearest_idx = np.argmin(distances)
-                segments[uy, ux] = assigned_ids[nearest_idx]
+                # No pixels in same region - pixel is geometrically separated from all existing segments
+                # Create a new segment for this isolated region
+                # Find a new segment ID
+                new_seg_id = max([info['id'] for info in segment_info]) + 1 if segment_info else 0
+                segments[uy, ux] = new_seg_id
 
-        # Update segment_info sizes and masks
+                # Check if we need to add this new segment to segment_info
+                # (will be batched later if multiple unassigned pixels form the same new segment)
+                # For now, just mark the pixel - we'll rebuild segment_info after this loop
+
+        # Rebuild segment_info to include any new segments created for isolated regions
+        existing_seg_ids = set(info['id'] for info in segment_info)
+        all_seg_ids = np.unique(segments[segments >= 0])
+
+        # Update existing segments
         for info in segment_info:
             seg_id = info['id']
             info['mask'] = (segments == seg_id)
             info['size'] = np.sum(info['mask'])
+
+        # Add new segments that were created for geometrically isolated regions
+        for seg_id in all_seg_ids:
+            if seg_id not in existing_seg_ids:
+                mask = (segments == seg_id)
+                size = np.sum(mask)
+                if size > 0:
+                    # Calculate centroid and color for new segment
+                    coords = np.argwhere(mask)
+                    centroid = tuple(coords.mean(axis=0))
+                    color = tuple(corner[mask].mean(axis=0).astype(int))
+
+                    segment_info.append({
+                        'id': int(seg_id),
+                        'size': int(size),
+                        'mask': mask,
+                        'centroid': centroid,
+                        'color': color
+                    })
 
         method = 'region-based assignment with line boundaries' if detected_lines else 'nearest neighbor'
         print(f'Assigned {unassigned_count} unassigned pixels using {method}')
