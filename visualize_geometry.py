@@ -283,6 +283,42 @@ else:
 contours, hierarchy = cv2.findContours(edges_background, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 print(f"Contour detection: found {len(contours)} contours in background")
 
+# Filter contours to find actual curves (not straight lines)
+detected_curves = []
+for contour in contours:
+    # Filter for significant curves
+    arc_length = cv2.arcLength(contour, False)
+
+    # Only consider contours with significant length
+    if arc_length < 30:  # At least 30 pixels long
+        continue
+
+    # Simplify contour slightly to remove noise
+    epsilon = 0.5  # Small epsilon to preserve curve shape
+    approx = cv2.approxPolyDP(contour, epsilon, False)
+
+    # Check if this is actually curved (not just a straight line)
+    # by comparing arc length to chord length
+    if len(approx) >= 3:
+        # Get start and end points
+        start = approx[0][0]
+        end = approx[-1][0]
+        chord_length = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
+
+        # If arc length is significantly longer than chord, it's curved
+        curvature_ratio = arc_length / (chord_length + 0.1)  # Avoid division by zero
+        if curvature_ratio > 1.1:  # At least 10% longer than straight line
+            # Store the curve as a list of points
+            points = approx.reshape(-1, 2)
+            detected_curves.append({
+                'points': points,
+                'length': arc_length,
+                'curvature': curvature_ratio
+            })
+
+if detected_curves:
+    print(f"  Detected {len(detected_curves)} significant curves (curvature ratio > 1.1)")
+
 # For each segment, determine what background colors it naturally extends into
 segment_background_regions = {}  # seg_id -> dilated region intersecting background
 
@@ -375,6 +411,7 @@ except:
     label_font = ImageFont.load_default()
 
 draw1 = ImageDraw.Draw(vis1_img)
+# Draw lines in green
 for idx, ((x1, y1), (x2, y2)) in enumerate(extended_lines):
     # Scale coordinates
     sx1, sy1 = x1 * scale_factor, y1 * scale_factor
@@ -386,7 +423,22 @@ for idx, ((x1, y1), (x2, y2)) in enumerate(extended_lines):
     mid_y = (sy1 + sy2) / 2
     draw1.text((mid_x, mid_y), f"L{idx}", fill=(255, 0, 0), font=label_font, anchor="mm")
 
+# Draw curves in blue
+for idx, curve in enumerate(detected_curves):
+    points = curve['points']
+    # Scale coordinates and convert to list of tuples
+    scaled_points = [(int(p[0] * scale_factor), int(p[1] * scale_factor)) for p in points]
+    # Draw the curve as a polyline
+    draw1.line(scaled_points, fill=(0, 100, 255), width=3)
+
+    # Add curve label at midpoint
+    mid_idx = len(points) // 2
+    mid_x = points[mid_idx][0] * scale_factor
+    mid_y = points[mid_idx][1] * scale_factor
+    draw1.text((mid_x, mid_y), f"C{idx}", fill=(255, 0, 255), font=label_font, anchor="mm")
+
 draw3 = ImageDraw.Draw(vis3_img)
+# Draw lines in green
 for idx, ((x1, y1), (x2, y2)) in enumerate(extended_lines):
     # Scale coordinates
     sx1, sy1 = x1 * scale_factor, y1 * scale_factor
@@ -397,6 +449,20 @@ for idx, ((x1, y1), (x2, y2)) in enumerate(extended_lines):
     mid_x = (sx1 + sx2) / 2
     mid_y = (sy1 + sy2) / 2
     draw3.text((mid_x, mid_y), f"L{idx}", fill=(255, 0, 0), font=label_font, anchor="mm")
+
+# Draw curves in blue
+for idx, curve in enumerate(detected_curves):
+    points = curve['points']
+    # Scale coordinates and convert to list of tuples
+    scaled_points = [(int(p[0] * scale_factor), int(p[1] * scale_factor)) for p in points]
+    # Draw the curve as a polyline
+    draw3.line(scaled_points, fill=(0, 100, 255), width=3)
+
+    # Add curve label at midpoint
+    mid_idx = len(points) // 2
+    mid_x = points[mid_idx][0] * scale_factor
+    mid_y = points[mid_idx][1] * scale_factor
+    draw3.text((mid_x, mid_y), f"C{idx}", fill=(255, 0, 255), font=label_font, anchor="mm")
 
 # Create canvas with 3 panels side by side
 canvas_width = 100 * scale_factor * 3 + 400  # 3 panels + margins
@@ -421,12 +487,12 @@ except:
     font_small = ImageFont.load_default()
 
 # Panel titles
-draw.text((margin + 100 * scale_factor // 2, margin - 50), "1. Extended Lines (Green)",
+draw.text((margin + 100 * scale_factor // 2, margin - 50), "1. Lines (Green) + Curves (Blue)",
           fill=(0, 0, 0), font=font_large, anchor="mm")
 draw.text((margin + panel_spacing + 100 * scale_factor // 2, margin - 50),
           "2. Segments + Background Regions", fill=(0, 0, 0), font=font_large, anchor="mm")
 draw.text((margin + panel_spacing * 2 + 100 * scale_factor // 2, margin - 50),
-          "3. Lines Through Watermark", fill=(0, 0, 0), font=font_large, anchor="mm")
+          "3. Geometry Through Watermark", fill=(0, 0, 0), font=font_large, anchor="mm")
 
 # Add legend at bottom
 legend_y = margin + 100 * scale_factor + 150
