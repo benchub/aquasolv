@@ -391,7 +391,51 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                         pixel_groups[side_signature] = []
                     pixel_groups[side_signature].append((py, px))
 
-                # If all pixels have the same signature, no split needed
+                # If all pixels have the same signature, check if color variation suggests a split
+                if len(pixel_groups) == 1 and len(seg_pixels) > 20:
+                    # Check if actual pixel colors vary significantly across geometric boundaries
+                    for line in full_lines:
+                        (x1, y1), (x2, y2) = line
+
+                        # Separate pixels by which side of this specific line they're on
+                        left_pixels = []
+                        right_pixels = []
+                        for py, px in seg_pixels:
+                            cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+                            if cross > 1.0:
+                                right_pixels.append((py, px))
+                            elif cross < -1.0:
+                                left_pixels.append((py, px))
+
+                        # If both sides have sufficient pixels, check color difference
+                        if len(left_pixels) > 5 and len(right_pixels) > 5:
+                            # Sample colors from each side
+                            left_colors = [corner[py, px] for py, px in left_pixels[:20]]
+                            right_colors = [corner[py, px] for py, px in right_pixels[:20]]
+
+                            left_mean = np.mean(left_colors, axis=0)
+                            right_mean = np.mean(right_colors, axis=0)
+
+                            color_diff = np.max(np.abs(left_mean - right_mean))
+
+                            # Debug: always print the color difference
+                            if len(left_pixels) + len(right_pixels) == len(seg_pixels) - 10:  # Most pixels accounted for
+                                print(f'    Segment {info["id"]}: left={len(left_pixels)}px, right={len(right_pixels)}px, color_diff={color_diff:.1f}')
+
+                            # If colors differ by more than 3, split by this line
+                            if color_diff > 3:
+                                print(f'  Segment {info["id"]} has color variation (diff={color_diff:.1f}) across line, forcing split')
+                                pixel_groups = {}
+                                for py, px in seg_pixels:
+                                    cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+                                    side = 1 if cross > 1.0 else (-1 if cross < -1.0 else 0)
+                                    side_tuple = (side,)
+                                    if side_tuple not in pixel_groups:
+                                        pixel_groups[side_tuple] = []
+                                    pixel_groups[side_tuple].append((py, px))
+                                break  # Found a line to split by
+
+                # If all pixels still have the same signature, no split needed
                 if len(pixel_groups) == 1:
                     new_segment_info.append(info)
                     continue
@@ -431,11 +475,40 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             segment_id = next_segment_id
             print(f'After geometric splitting: {len(segment_info)} segments')
 
+    # Helper function to check if a segment spans across any geometric line
+    def segment_spans_line(info, lines):
+        """Check if a single segment has pixels on both sides of any line."""
+        if not lines:
+            return False
+
+        mask = info['mask']
+        pixels_y, pixels_x = np.where(mask)
+
+        for line in lines:
+            (x1, y1), (x2, y2) = line
+
+            sides = set()
+            for py, px in zip(pixels_y, pixels_x):
+                cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+                if abs(cross) > 1.0:
+                    sides.add(1 if cross > 0 else -1)
+
+            # If pixels are on both sides, segment spans the line
+            if len(sides) > 1:
+                return True
+
+        return False
+
     # Helper function to check if two segments are separated by geometric lines
     def segments_separated_by_geometry(info1, info2, lines):
         """Check if segments span across a line or are on opposite sides."""
         if not lines:
             return False
+
+        # First check if either segment itself spans a line
+        # (Don't merge with or into segments that cross boundaries)
+        if segment_spans_line(info1, lines) or segment_spans_line(info2, lines):
+            return True
 
         # For each line, check if it separates the segments
         for line in lines:
