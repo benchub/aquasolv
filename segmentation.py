@@ -345,6 +345,79 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     if detected_lines:
         print(f'Detected {len(detected_lines)} geometric boundaries for merge guidance')
 
+        # Split segments that span across geometric boundaries
+        # This is critical because initial segmentation only uses color,
+        # so pixels on opposite sides of a line can be in the same segment
+        new_segment_info = []
+        new_segments = segments.copy()
+        next_segment_id = segment_id
+
+        for info in segment_info:
+            seg_mask = info['mask']
+            seg_pixels = np.argwhere(seg_mask)
+
+            if len(seg_pixels) == 0:
+                continue
+
+            # For each pixel, compute which side of each line it's on
+            # Group pixels by their "side signature"
+            pixel_groups = {}  # side_signature -> list of pixel coords
+
+            for py, px in seg_pixels:
+                # Compute side signature: tuple of which side of each line
+                side_signature = []
+                for line in detected_lines:
+                    (x1, y1), (x2, y2) = line
+                    cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+                    # Use sign to determine side: -1, 0, or 1
+                    side = 1 if cross > 1.0 else (-1 if cross < -1.0 else 0)
+                    side_signature.append(side)
+
+                side_signature = tuple(side_signature)
+                if side_signature not in pixel_groups:
+                    pixel_groups[side_signature] = []
+                pixel_groups[side_signature].append((py, px))
+
+            # If all pixels have the same signature, no split needed
+            if len(pixel_groups) == 1:
+                new_segment_info.append(info)
+                continue
+
+            # Split into multiple segments
+            print(f'  Splitting segment {info["id"]} into {len(pixel_groups)} parts across geometric boundaries')
+
+            # First, clear all pixels from this segment (set to -1)
+            # This ensures pixels in tiny fragments (<3) don't remain with old ID
+            new_segments[seg_mask] = -1
+
+            for i, (sig, pixels) in enumerate(pixel_groups.items()):
+                if len(pixels) < 3:  # Skip tiny fragments
+                    continue
+
+                # Create new segment
+                new_mask = np.zeros_like(seg_mask)
+                for py, px in pixels:
+                    new_mask[py, px] = True
+
+                new_id = next_segment_id if i > 0 else info['id']
+                if i > 0:
+                    next_segment_id += 1
+
+                new_segments[new_mask] = new_id
+                centroid = np.mean(pixels, axis=0)
+                new_segment_info.append({
+                    'id': new_id,
+                    'size': len(pixels),
+                    'mask': new_mask,
+                    'centroid': centroid,
+                    'color': info['color']
+                })
+
+        segment_info = new_segment_info
+        segments = new_segments
+        segment_id = next_segment_id
+        print(f'After geometric splitting: {len(segment_info)} segments')
+
     # Helper function to check if two segments are separated by geometric lines
     def segments_separated_by_geometry(info1, info2, lines):
         """Check if two segments are on opposite sides of any detected line."""
