@@ -339,6 +339,37 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     if not use_boundary_checking:
         print(f'  Skipping boundary checking for high-variance image (bg_var={bg_variance:.1f}, wm_var={wm_variance:.1f})')
 
+    # Detect geometric features EARLY to use during all merge phases
+    watermark_mask = (template > 0.005)
+    detected_lines = detect_geometric_features(corner, watermark_mask)
+    if detected_lines:
+        print(f'Detected {len(detected_lines)} geometric boundaries for merge guidance')
+
+    # Helper function to check if two segments are separated by geometric lines
+    def segments_separated_by_geometry(info1, info2, lines):
+        """Check if two segments are on opposite sides of any detected line."""
+        if not lines:
+            return False
+
+        # Get representative points from each segment (centroids)
+        cy1, cx1 = info1['centroid']
+        cy2, cx2 = info2['centroid']
+
+        # Check if centroids are on opposite sides of any line
+        for line in lines:
+            (x1, y1), (x2, y2) = line
+            # Cross product for point 1
+            side1 = (x2 - x1) * (cy1 - y1) - (y2 - y1) * (cx1 - x1)
+            # Cross product for point 2
+            side2 = (x2 - x1) * (cy2 - y1) - (y2 - y1) * (cx2 - x1)
+
+            # If signs are opposite and neither is very close to zero, they're separated
+            if abs(side1) > 1.0 and abs(side2) > 1.0:
+                if (side1 > 0 and side2 < 0) or (side1 < 0 and side2 > 0):
+                    return True
+
+        return False
+
     # First pass: Merge segments with identical quantized colors (even if not adjacent)
     # This handles cases where the same color appears in multiple disconnected regions
     # BUT: For low-variance images, don't merge if segments are on opposite sides
@@ -381,11 +412,43 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                             segments[segments == seg_id] = root_seg
                             identical_color_merges += 1
             else:
-                # High-variance images: merge all identical colors unconditionally
-                root_seg = seg_ids[0]
-                for seg_id in seg_ids[1:]:
-                    segments[segments == seg_id] = root_seg
-                    identical_color_merges += 1
+                # High-variance images: merge identical colors, but respect geometric boundaries
+                if detected_lines:
+                    # Check geometric separation for each pair
+                    merge_groups = []  # List of lists - each sublist is a group to merge
+                    for seg_id in seg_ids:
+                        info = next(i for i in segment_info if i['id'] == seg_id)
+                        # Find which group this segment belongs to
+                        found_group = False
+                        for group in merge_groups:
+                            # Check if this segment is NOT separated from any segment in the group
+                            can_merge_with_group = True
+                            for other_seg_id in group:
+                                other_info = next(i for i in segment_info if i['id'] == other_seg_id)
+                                if segments_separated_by_geometry(info, other_info, detected_lines):
+                                    can_merge_with_group = False
+                                    break
+                            if can_merge_with_group:
+                                group.append(seg_id)
+                                found_group = True
+                                break
+                        if not found_group:
+                            # Start a new group
+                            merge_groups.append([seg_id])
+
+                    # Merge within each group
+                    for group in merge_groups:
+                        if len(group) > 1:
+                            root_seg = group[0]
+                            for seg_id in group[1:]:
+                                segments[segments == seg_id] = root_seg
+                                identical_color_merges += 1
+                else:
+                    # No geometry detected: merge all identical colors unconditionally
+                    root_seg = seg_ids[0]
+                    for seg_id in seg_ids[1:]:
+                        segments[segments == seg_id] = root_seg
+                        identical_color_merges += 1
 
     # Rebuild segment_info after identical color merges
     if identical_color_merges > 0:
@@ -489,6 +552,14 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                         if horizontal_dist > 30 or vertical_dist > 30:
                             if min_size >= 50 and color_diff > 10:
                                 skip_merge = True
+
+                # Check if segments are separated by geometric boundaries
+                if not skip_merge and detected_lines:
+                    info1 = next((i for i in segment_info if i['id'] == seg1), None)
+                    info2 = next((i for i in segment_info if i['id'] == seg2), None)
+                    if info1 and info2:
+                        if segments_separated_by_geometry(info1, info2, detected_lines):
+                            skip_merge = True
 
                 if not skip_merge:
                     # Check if merging would create too large a color span
@@ -686,19 +757,11 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         assigned_coords = np.argwhere(assigned_mask)
         assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
 
-        # Debug: Track a specific problematic pixel
-        debug_pixel = (40, 50)  # Pixel that should be cyan but might be blue
-
         # For each unassigned pixel, find assigned pixels in the same region
         for uy, ux in unassigned_coords:
             # Find all assigned pixels that are NOT separated by any line
             same_region_mask = []
             same_region_segments = []
-
-            is_debug = (ux == debug_pixel[0] and uy == debug_pixel[1])
-            if is_debug:
-                print(f"\nDEBUG pixel ({ux},{uy}):")
-                print(f"  Detected lines: {len(detected_lines) if detected_lines else 0}")
 
             for i, (ay, ax) in enumerate(assigned_coords):
                 if detected_lines:
@@ -706,9 +769,6 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                     if not separated:
                         same_region_mask.append(i)
                         same_region_segments.append(assigned_ids[i])
-
-                        if is_debug and len(same_region_mask) <= 5:  # First 5 only
-                            print(f"    Same region as ({ax},{uy}): seg {assigned_ids[i]}")
                 else:
                     same_region_mask.append(i)
                     same_region_segments.append(assigned_ids[i])
