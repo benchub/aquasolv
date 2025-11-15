@@ -433,25 +433,48 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
 
     # Helper function to check if two segments are separated by geometric lines
     def segments_separated_by_geometry(info1, info2, lines):
-        """Check if two segments are on opposite sides of any detected line."""
+        """Check if segments span across a line or are on opposite sides."""
         if not lines:
             return False
 
-        # Get representative points from each segment (centroids)
-        cy1, cx1 = info1['centroid']
-        cy2, cx2 = info2['centroid']
-
-        # Check if centroids are on opposite sides of any line
+        # For each line, check if it separates the segments
         for line in lines:
             (x1, y1), (x2, y2) = line
-            # Cross product for point 1
-            side1 = (x2 - x1) * (cy1 - y1) - (y2 - y1) * (cx1 - x1)
-            # Cross product for point 2
-            side2 = (x2 - x1) * (cy2 - y1) - (y2 - y1) * (cx2 - x1)
 
-            # If signs are opposite and neither is very close to zero, they're separated
-            if abs(side1) > 1.0 and abs(side2) > 1.0:
-                if (side1 > 0 and side2 < 0) or (side1 < 0 and side2 > 0):
+            # Sample pixels from each segment to check which side they're on
+            mask1 = info1['mask']
+            mask2 = info2['mask']
+
+            # Get pixel coordinates
+            pixels1_y, pixels1_x = np.where(mask1)
+            pixels2_y, pixels2_x = np.where(mask2)
+
+            # Sample up to 50 pixels from each segment for efficiency
+            if len(pixels1_x) > 50:
+                indices = np.random.choice(len(pixels1_x), 50, replace=False)
+                pixels1_y = pixels1_y[indices]
+                pixels1_x = pixels1_x[indices]
+            if len(pixels2_x) > 50:
+                indices = np.random.choice(len(pixels2_x), 50, replace=False)
+                pixels2_y = pixels2_y[indices]
+                pixels2_x = pixels2_x[indices]
+
+            # Calculate which side of the line the pixels are on
+            sides1 = set()
+            for py, px in zip(pixels1_y, pixels1_x):
+                cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+                if abs(cross) > 1.0:  # Not on the line
+                    sides1.add(1 if cross > 0 else -1)
+
+            sides2 = set()
+            for py, px in zip(pixels2_y, pixels2_x):
+                cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+                if abs(cross) > 1.0:  # Not on the line
+                    sides2.add(1 if cross > 0 else -1)
+
+            # If segments are on opposite sides (no overlap in side sets), they're separated
+            if len(sides1) > 0 and len(sides2) > 0:
+                if len(sides1 & sides2) == 0:  # No common sides
                     return True
 
         return False
