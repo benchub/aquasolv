@@ -114,9 +114,11 @@ def detect_geometric_features(corner, watermark_mask):
                 intersection = line_intersection(extended_lines[i], extended_lines[j])
                 if intersection:
                     ix, iy = intersection
-                    if watermark_mask[int(iy), int(ix)]:
-                        line_intersections[i].append((ix, iy, j))
-                        line_intersections[j].append((ix, iy, i))
+                    # Check if intersection is within image bounds
+                    if 0 <= int(ix) < 100 and 0 <= int(iy) < 100:
+                        if watermark_mask[int(iy), int(ix)]:
+                            line_intersections[i].append((ix, iy, j))
+                            line_intersections[j].append((ix, iy, i))
 
         # Trim lines at intersections using mutual corner detection
         # Store temporary line endpoints for iterative refinement
@@ -213,7 +215,51 @@ def detect_geometric_features(corner, watermark_mask):
                 else:
                     trimmed_lines.append((source_end, line_endpoints[i]['target']))
 
-        return trimmed_lines if trimmed_lines else None
+        # Detect curves in background using contours
+        detected_curves = []
+        try:
+            contours, _ = cv2.findContours(edges_background, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+            for contour in contours:
+                # Filter for significant curves
+                arc_length = cv2.arcLength(contour, False)
+
+                # Only consider contours with significant length
+                if arc_length < 30:  # At least 30 pixels long
+                    continue
+
+                # Simplify contour slightly to remove noise
+                epsilon = 0.5  # Small epsilon to preserve curve shape
+                approx = cv2.approxPolyDP(contour, epsilon, False)
+
+                # Check if this is actually curved (not just a straight line)
+                # by comparing arc length to chord length
+                if len(approx) >= 3:
+                    # Get start and end points
+                    start = approx[0][0]
+                    end = approx[-1][0]
+                    chord_length = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
+
+                    # If arc length is significantly longer than chord, it's curved
+                    curvature_ratio = arc_length / (chord_length + 0.1)  # Avoid division by zero
+                    if curvature_ratio > 1.1:  # At least 10% longer than straight line
+                        # Store the curve as a list of points
+                        points = approx.reshape(-1, 2).astype(float)
+                        detected_curves.append({
+                            'points': points,
+                            'length': arc_length,
+                            'curvature': curvature_ratio
+                        })
+
+        except Exception as e:
+            print(f"WARNING: Curve detection failed: {e}")
+
+        # Return both lines and curves
+        result = {
+            'lines': trimmed_lines if trimmed_lines else [],
+            'curves': detected_curves
+        }
+        return result if (trimmed_lines or detected_curves) else None
 
     except Exception as e:
         # If geometric detection fails for any reason, return None
@@ -341,9 +387,15 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
 
     # Detect geometric features EARLY to use during all merge phases
     watermark_mask = (template > 0.005)
-    detected_lines = detect_geometric_features(corner, watermark_mask)
-    if detected_lines:
-        print(f'Detected {len(detected_lines)} geometric boundaries for merge guidance')
+    geometry_result = detect_geometric_features(corner, watermark_mask)
+
+    detected_lines = []
+    detected_curves = []
+    if geometry_result:
+        detected_lines = geometry_result.get('lines', [])
+        detected_curves = geometry_result.get('curves', [])
+        total_features = len(detected_lines) + len(detected_curves)
+        print(f'Detected {len(detected_lines)} lines and {len(detected_curves)} curves ({total_features} total boundaries)')
 
         # Filter to only use "full lines" (long lines that span across the image)
         # Short corner segments shouldn't split the main watermark regions
@@ -355,8 +407,9 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             if length >= 60:
                 full_lines.append(line)
 
-        if full_lines:
-            print(f'  Using {len(full_lines)} full lines for splitting (ignoring {len(detected_lines) - len(full_lines)} short corner segments)')
+        # All curves are considered "full" features since they're already filtered for significance
+        if full_lines or detected_curves:
+            print(f'  Using {len(full_lines)} full lines and {len(detected_curves)} curves for splitting (ignoring {len(detected_lines) - len(full_lines)} short corner segments)')
 
             # Split segments that span across geometric boundaries
             # This is critical because initial segmentation only uses color,
@@ -476,6 +529,70 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
             print(f'After geometric splitting: {len(segment_info)} segments')
 
     # Helper function to check if a segment spans across any geometric line
+    # Helper functions for curve boundary checking
+    def point_side_of_curve(px, py, curve_points):
+        """
+        Determine which side of a curve a point is on.
+        Returns: 1 for one side, -1 for other side, based on nearest curve segment.
+        """
+        if len(curve_points) < 2:
+            return 0
+
+        # Find the nearest segment on the curve
+        min_dist = float('inf')
+        nearest_side = 0
+
+        for i in range(len(curve_points) - 1):
+            x1, y1 = curve_points[i]
+            x2, y2 = curve_points[i + 1]
+
+            # Use cross product to determine side
+            cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+
+            # Calculate distance to segment
+            # Vector from point1 to test point
+            dx, dy = px - x1, py - y1
+            # Vector of the segment
+            sx, sy = x2 - x1, y2 - y1
+            seg_length_sq = sx * sx + sy * sy
+
+            if seg_length_sq > 0:
+                # Project point onto segment
+                t = max(0, min(1, (dx * sx + dy * sy) / seg_length_sq))
+                proj_x, proj_y = x1 + t * sx, y1 + t * sy
+                dist = np.sqrt((px - proj_x)**2 + (py - proj_y)**2)
+
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest_side = 1 if cross > 0 else -1
+
+        return nearest_side
+
+    def segment_spans_curve(info, curves):
+        """Check if a single segment has pixels on both sides of any curve."""
+        if not curves:
+            return False
+
+        mask = info['mask']
+        pixels_y, pixels_x = np.where(mask)
+
+        for curve in curves:
+            curve_points = curve['points']
+            if len(curve_points) < 2:
+                continue
+
+            sides = set()
+            for py, px in zip(pixels_y, pixels_x):
+                side = point_side_of_curve(px, py, curve_points)
+                if side != 0:
+                    sides.add(side)
+
+            # If pixels are on both sides, segment spans the curve
+            if len(sides) > 1:
+                return True
+
+        return False
+
     def segment_spans_line(info, lines):
         """Check if a single segment has pixels on both sides of any line."""
         if not lines:
@@ -500,14 +617,17 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         return False
 
     # Helper function to check if two segments are separated by geometric lines
-    def segments_separated_by_geometry(info1, info2, lines):
-        """Check if segments span across a line or are on opposite sides."""
-        if not lines:
+    def segments_separated_by_geometry(info1, info2, lines, curves=None):
+        """Check if segments span across a line/curve or are on opposite sides."""
+        if not lines and not curves:
             return False
 
-        # First check if either segment itself spans a line
+        # First check if either segment itself spans a line or curve
         # (Don't merge with or into segments that cross boundaries)
         if segment_spans_line(info1, lines) or segment_spans_line(info2, lines):
+            return True
+
+        if curves and (segment_spans_curve(info1, curves) or segment_spans_curve(info2, curves)):
             return True
 
         # Check if MERGING these segments would create a segment that spans a line
@@ -660,7 +780,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                             group_combined_info = {'id': f"group_{group[0]}", 'mask': group_mask}
 
                             # Check if adding seg_id to this group would span lines
-                            if not segments_separated_by_geometry(group_combined_info, info, detected_lines):
+                            if not segments_separated_by_geometry(group_combined_info, info, detected_lines, detected_curves):
                                 group.append(seg_id)
                                 found_group = True
                                 break
@@ -807,7 +927,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                         group1_info = {'id': root1, 'mask': group1_mask}
                         group2_info = {'id': root2, 'mask': group2_mask}
 
-                        if segments_separated_by_geometry(group1_info, group2_info, detected_lines):
+                        if segments_separated_by_geometry(group1_info, group2_info, detected_lines, detected_curves):
                             skip_merge = True
                 elif not skip_merge:
                     pass  # No detected_lines to check
@@ -887,7 +1007,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                     for neighbor_id in adjacent_segs:
                         neighbor_info = next((s for s in segment_info if s['id'] == neighbor_id), None)
                         if neighbor_info:
-                            if not segments_separated_by_geometry(info, neighbor_info, detected_lines):
+                            if not segments_separated_by_geometry(info, neighbor_info, detected_lines, detected_curves):
                                 valid_neighbors.append(neighbor_id)
                     # Skip merge if all neighbors are separated by geometric boundaries
                     if not valid_neighbors:
@@ -958,7 +1078,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                     for neighbor_id in adjacent_segs:
                         neighbor_info = next((s for s in segment_info if s['id'] == neighbor_id), None)
                         if neighbor_info:
-                            if not segments_separated_by_geometry(info, neighbor_info, detected_lines):
+                            if not segments_separated_by_geometry(info, neighbor_info, detected_lines, detected_curves):
                                 valid_neighbors.append(neighbor_id)
                     # Skip merge if all neighbors are separated by geometric boundaries
                     if not valid_neighbors:
@@ -997,8 +1117,10 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     unassigned_count = np.sum(unassigned_mask)
 
     if unassigned_count > 0:
-        # Detect geometric features (lines) in the background
-        detected_lines = detect_geometric_features(corner, watermark_mask)
+        # Detect geometric features (lines and curves) in the background
+        geometry_result = detect_geometric_features(corner, watermark_mask)
+        detected_lines = geometry_result.get('lines', []) if geometry_result else []
+        detected_curves = geometry_result.get('curves', []) if geometry_result else []
 
         # Helper function to check which side of a line a point is on
         def point_side_of_line(px, py, line):
