@@ -668,9 +668,13 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                 side1 = point_side_of_line(p1x, p1y, line)
                 side2 = point_side_of_line(p2x, p2y, line)
 
-                # If signs are opposite (and neither is zero), they're separated
-                if (side1 > 0 and side2 < 0) or (side1 < 0 and side2 > 0):
-                    return True
+                # If signs are opposite, they're separated by this line
+                # Only skip if BOTH points are very close to the line (likely on it)
+                both_on_line = abs(side1) < 0.01 and abs(side2) < 0.01
+
+                if not both_on_line:
+                    if (side1 > 0 and side2 < 0) or (side1 < 0 and side2 > 0):
+                        return True
 
             return False
 
@@ -682,11 +686,19 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         assigned_coords = np.argwhere(assigned_mask)
         assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
 
+        # Debug: Track a specific problematic pixel
+        debug_pixel = (40, 50)  # Pixel that should be cyan but might be blue
+
         # For each unassigned pixel, find assigned pixels in the same region
         for uy, ux in unassigned_coords:
             # Find all assigned pixels that are NOT separated by any line
             same_region_mask = []
             same_region_segments = []
+
+            is_debug = (ux == debug_pixel[0] and uy == debug_pixel[1])
+            if is_debug:
+                print(f"\nDEBUG pixel ({ux},{uy}):")
+                print(f"  Detected lines: {len(detected_lines) if detected_lines else 0}")
 
             for i, (ay, ax) in enumerate(assigned_coords):
                 if detected_lines:
@@ -694,6 +706,9 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                     if not separated:
                         same_region_mask.append(i)
                         same_region_segments.append(assigned_ids[i])
+
+                        if is_debug and len(same_region_mask) <= 5:  # First 5 only
+                            print(f"    Same region as ({ax},{uy}): seg {assigned_ids[i]}")
                 else:
                     same_region_mask.append(i)
                     same_region_segments.append(assigned_ids[i])
