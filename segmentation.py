@@ -254,6 +254,140 @@ def detect_geometric_features(corner, watermark_mask):
         except Exception as e:
             print(f"WARNING: Curve detection failed: {e}")
 
+        # Extend curves through watermark and find intersections (similar to line mutual corners)
+        if len(detected_curves) >= 2:
+            try:
+                # First, extrapolate each curve's endpoints into the watermark
+                for idx, curve in enumerate(detected_curves):
+                    points = curve['points']
+
+                    # Extrapolate from start
+                    if len(points) >= 3:
+                        p0, p1, p2 = points[0], points[1], points[2]
+                        dx = p0[0] - p1[0]
+                        dy = p0[1] - p1[1]
+                        length = np.sqrt(dx*dx + dy*dy)
+                        if length > 0:
+                            dx /= length
+                            dy /= length
+                            new_point = p0 + np.array([dx * 50, dy * 50])
+                            if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
+                                if watermark_mask[int(new_point[1]), int(new_point[0])]:
+                                    curve['points'] = np.vstack([new_point, points])
+
+                    # Extrapolate from end
+                    if len(points) >= 3:
+                        p0, p1, p2 = points[-1], points[-2], points[-3]
+                        dx = p0[0] - p1[0]
+                        dy = p0[1] - p1[1]
+                        length = np.sqrt(dx*dx + dy*dy)
+                        if length > 0:
+                            dx /= length
+                            dy /= length
+                            new_point = p0 + np.array([dx * 50, dy * 50])
+                            if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
+                                if watermark_mask[int(new_point[1]), int(new_point[0])]:
+                                    curve['points'] = np.vstack([curve['points'], new_point])
+
+                # Check which curves might connect (endpoints close together inside watermark)
+                curve_connections = []
+                for i in range(len(detected_curves)):
+                    for j in range(i + 1, len(detected_curves)):
+                        curve_i = detected_curves[i]
+                        curve_j = detected_curves[j]
+
+                        # Check all endpoint pairs
+                        endpoints_i = [curve_i['points'][0], curve_i['points'][-1]]
+                        endpoints_j = [curve_j['points'][0], curve_j['points'][-1]]
+
+                        for ei_idx, ei in enumerate(endpoints_i):
+                            for ej_idx, ej in enumerate(endpoints_j):
+                                dist = np.sqrt((ei[0] - ej[0])**2 + (ei[1] - ej[1])**2)
+
+                                # If endpoints are close and both inside watermark, they might connect
+                                if dist < 35:  # Within 35 pixels
+                                    ix, iy = (ei + ej) / 2
+                                    if 0 <= int(ix) < 100 and 0 <= int(iy) < 100:
+                                        if watermark_mask[int(iy), int(ix)]:
+                                            # This is a potential connection point inside the watermark
+                                            curve_connections.append({
+                                                'curves': (i, j),
+                                                'endpoints': (ei_idx, ej_idx),
+                                                'meeting_point': (ix, iy),
+                                                'distance': dist
+                                            })
+
+                # Merge connected curves into continuous curves
+                if curve_connections:
+                    # Build a graph of curve connections
+                    from collections import defaultdict
+                    curve_graph = defaultdict(list)
+                    for conn in curve_connections:
+                        i, j = conn['curves']
+                        curve_graph[i].append(conn)
+                        curve_graph[j].append(conn)
+
+                    # Find connected components (groups of curves that should be merged)
+                    visited = set()
+                    merged_curves = []
+
+                    for start_idx in range(len(detected_curves)):
+                        if start_idx in visited:
+                            continue
+
+                        # BFS to find all connected curves
+                        connected = {start_idx}
+                        queue = [start_idx]
+                        connections_used = []
+
+                        while queue:
+                            curr = queue.pop(0)
+                            visited.add(curr)
+
+                            for conn in curve_graph[curr]:
+                                i, j = conn['curves']
+                                other = j if i == curr else i
+                                if other not in connected:
+                                    connected.add(other)
+                                    queue.append(other)
+                                    connections_used.append(conn)
+
+                        # If multiple curves connected, merge them
+                        if len(connected) > 1:
+                            # For now, keep as separate but mark the connection points
+                            # This is complex to merge properly, so we'll extend each curve to the meeting point
+                            for conn in connections_used:
+                                i, j = conn['curves']
+                                ei_idx, ej_idx = conn['endpoints']
+                                meeting = conn['meeting_point']
+
+                                # Extend curve i endpoint to meeting point
+                                if ei_idx == 0:  # Extend from start
+                                    detected_curves[i]['points'] = np.vstack([
+                                        np.array([meeting]),
+                                        detected_curves[i]['points']
+                                    ])
+                                else:  # Extend from end
+                                    detected_curves[i]['points'] = np.vstack([
+                                        detected_curves[i]['points'],
+                                        np.array([meeting])
+                                    ])
+
+                                # Extend curve j endpoint to meeting point
+                                if ej_idx == 0:  # Extend from start
+                                    detected_curves[j]['points'] = np.vstack([
+                                        np.array([meeting]),
+                                        detected_curves[j]['points']
+                                    ])
+                                else:  # Extend from end
+                                    detected_curves[j]['points'] = np.vstack([
+                                        detected_curves[j]['points'],
+                                        np.array([meeting])
+                                    ])
+
+            except Exception as e:
+                print(f"WARNING: Curve extension failed: {e}")
+
         # Return both lines and curves
         result = {
             'lines': trimmed_lines if trimmed_lines else [],
