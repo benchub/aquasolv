@@ -316,6 +316,8 @@ def segmented_inpaint_watermark(img_array, template_mask):
     core_mask = seg_result['core_mask']
     edge_mask = seg_result['edge_mask']
     bg_variance = seg_result['bg_variance']
+    detected_curves = seg_result.get('detected_curves', [])
+    partition_map = seg_result.get('partition_map', None)
 
     unique_segments = [info['id'] for info in segment_info]
 
@@ -411,6 +413,14 @@ def segmented_inpaint_watermark(img_array, template_mask):
         segment_coords = np.argwhere(segment_mask)
         print(f"  Processing segment {segment_id} with {len(segment_coords)} pixels")
 
+        # Get partition ID for this segment (for partition-aware boundary sampling)
+        segment_partition = None
+        if partition_map is not None:
+            for info in segment_info:
+                if info['id'] == segment_id:
+                    segment_partition = info.get('partition')
+                    break
+
         # Find where THIS segment touches the outer edge of the watermark core
         # Step 1: Find edge pixels of this segment (pixels at the boundary of the segment)
         segment_edge = segment_mask & ~binary_erosion(segment_mask, iterations=1)
@@ -440,6 +450,14 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 segment_dilated = binary_dilation(segment_dilated, iterations=1)
                 # Find where dilated segment meets the outer watermark boundary
                 contact_points = segment_dilated & ~core_mask
+
+                # If partitions exist, only sample from boundary pixels in the same partition
+                if partition_map is not None and segment_partition is not None:
+                    # Create a mask for the partition-extended region (partition pixels + adjacent boundary)
+                    partition_mask = (partition_map == segment_partition)
+                    partition_extended = binary_dilation(partition_mask, iterations=2)
+                    contact_points = contact_points & partition_extended
+
                 if np.any(contact_points):
                     # These are the points just outside watermark where segment reaches
                     segment_boundary_colors = corner_original[contact_points]  # Use original, not processed
@@ -490,6 +508,13 @@ def segmented_inpaint_watermark(img_array, template_mask):
             segment_dilated = binary_dilation(segment_mask, iterations=3)
             # Find pixels that are: (1) reached by dilated segment, AND (2) in the watermark boundary ring
             boundary_contact = segment_dilated & watermark_boundary
+
+            # If partitions exist, only sample from boundary pixels in the same partition
+            if partition_map is not None and segment_partition is not None:
+                # Create a mask for the partition-extended region (partition pixels + adjacent boundary)
+                partition_mask = (partition_map == segment_partition)
+                partition_extended = binary_dilation(partition_mask, iterations=2)
+                boundary_contact = boundary_contact & partition_extended
 
             # Sample ALL reachable boundary pixels for accurate color representation
             boundary_coords = np.argwhere(boundary_contact)
@@ -580,13 +605,15 @@ def segmented_inpaint_watermark(img_array, template_mask):
         segment_all_coords = np.array(segment_all_coords)
         segment_all_ids = np.array(segment_all_ids)
 
+        # Assign edge pixels using simple nearest neighbor
+        # Partitions already ensure segments don't cross geometric boundaries,
+        # so no need for curve-aware filtering here
         edge_coords = np.argwhere(edge_mask)
         for ey, ex in edge_coords:
-            # Find the nearest segment by checking the segments array
-            # Find closest core pixel and use its segment assignment
+            # Find the nearest segment
             distances_to_core = np.sqrt(np.sum((segment_all_coords - np.array([ey, ex]))**2, axis=1))
-            closest_core_idx = np.argmin(distances_to_core)
-            closest_segment_id = segment_all_ids[closest_core_idx]
+            nearest_idx = np.argmin(distances_to_core)
+            closest_segment_id = segment_all_ids[nearest_idx]
 
             # Use that segment's fill color
             fill_color = segment_fill_colors[closest_segment_id]

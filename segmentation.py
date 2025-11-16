@@ -254,68 +254,173 @@ def detect_geometric_features(corner, watermark_mask):
         except Exception as e:
             print(f"WARNING: Curve detection failed: {e}")
 
-        # Extend curves through watermark and find intersections (similar to line mutual corners)
+        # Function to fit circle to a set of points using algebraic fit
+        def fit_circle_to_points(points):
+            """Fit a circle to a set of 2D points. Returns (cx, cy, radius) or None if fit fails."""
+            if len(points) < 3:
+                return None
+
+            # Use algebraic circle fit: x^2 + y^2 + D*x + E*y + F = 0
+            # Center: (-D/2, -E/2), Radius: sqrt(D^2/4 + E^2/4 - F)
+            x = points[:, 0]
+            y = points[:, 1]
+
+            # Build the design matrix
+            A = np.column_stack([x, y, np.ones(len(points))])
+            b = -(x**2 + y**2)
+
+            try:
+                # Solve least squares
+                coeffs, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+                D, E, F = coeffs
+
+                cx = -D / 2
+                cy = -E / 2
+                radius = np.sqrt(D**2/4 + E**2/4 - F)
+
+                return (cx, cy, radius)
+            except:
+                return None
+
+        # Function to trace a circular arc from one point to another
+        def trace_circular_arc(center, radius, start_point, end_point, num_points=50):
+            """Trace a circular arc from start_point to end_point along a circle."""
+            cx, cy = center
+
+            # Get angles for start and end points
+            start_angle = np.arctan2(start_point[1] - cy, start_point[0] - cx)
+            end_angle = np.arctan2(end_point[1] - cy, end_point[0] - cx)
+
+            # Calculate angular difference (take shortest path)
+            angle_diff = end_angle - start_angle
+            if angle_diff > np.pi:
+                angle_diff -= 2 * np.pi
+            elif angle_diff < -np.pi:
+                angle_diff += 2 * np.pi
+
+            # Generate points along the arc
+            angles = np.linspace(start_angle, start_angle + angle_diff, num_points)
+            arc_points = np.column_stack([
+                cx + radius * np.cos(angles),
+                cy + radius * np.sin(angles)
+            ])
+
+            return arc_points
+
+        # Extend curves through watermark using circle fitting
         if len(detected_curves) >= 2:
             try:
-                # First, extrapolate each curve's endpoints into the watermark
-                for idx, curve in enumerate(detected_curves):
-                    points = curve['points']
 
-                    # Extrapolate from start
-                    if len(points) >= 3:
-                        p0, p1, p2 = points[0], points[1], points[2]
-                        dx = p0[0] - p1[0]
-                        dy = p0[1] - p1[1]
-                        length = np.sqrt(dx*dx + dy*dy)
-                        if length > 0:
-                            dx /= length
-                            dy /= length
-                            new_point = p0 + np.array([dx * 50, dy * 50])
-                            if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
-                                if watermark_mask[int(new_point[1]), int(new_point[0])]:
-                                    curve['points'] = np.vstack([new_point, points])
-
-                    # Extrapolate from end
-                    if len(points) >= 3:
-                        p0, p1, p2 = points[-1], points[-2], points[-3]
-                        dx = p0[0] - p1[0]
-                        dy = p0[1] - p1[1]
-                        length = np.sqrt(dx*dx + dy*dy)
-                        if length > 0:
-                            dx /= length
-                            dy /= length
-                            new_point = p0 + np.array([dx * 50, dy * 50])
-                            if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
-                                if watermark_mask[int(new_point[1]), int(new_point[0])]:
-                                    curve['points'] = np.vstack([curve['points'], new_point])
-
-                # Check which curves might connect (endpoints close together inside watermark)
+                # Try to connect curves using circle fitting
                 curve_connections = []
                 for i in range(len(detected_curves)):
                     for j in range(i + 1, len(detected_curves)):
                         curve_i = detected_curves[i]
                         curve_j = detected_curves[j]
 
-                        # Check all endpoint pairs
-                        endpoints_i = [curve_i['points'][0], curve_i['points'][-1]]
-                        endpoints_j = [curve_j['points'][0], curve_j['points'][-1]]
+                        # Try fitting a circle to both curves combined
+                        combined_points = np.vstack([curve_i['points'], curve_j['points']])
+                        circle_fit = fit_circle_to_points(combined_points)
 
-                        for ei_idx, ei in enumerate(endpoints_i):
-                            for ej_idx, ej in enumerate(endpoints_j):
-                                dist = np.sqrt((ei[0] - ej[0])**2 + (ei[1] - ej[1])**2)
+                        if circle_fit is None:
+                            continue
 
-                                # If endpoints are close and both inside watermark, they might connect
-                                if dist < 35:  # Within 35 pixels
-                                    ix, iy = (ei + ej) / 2
-                                    if 0 <= int(ix) < 100 and 0 <= int(iy) < 100:
-                                        if watermark_mask[int(iy), int(ix)]:
-                                            # This is a potential connection point inside the watermark
-                                            curve_connections.append({
-                                                'curves': (i, j),
-                                                'endpoints': (ei_idx, ej_idx),
-                                                'meeting_point': (ix, iy),
-                                                'distance': dist
-                                            })
+                        cx, cy, radius = circle_fit
+
+                        # Check if the circle fit is reasonable (not too large or too small)
+                        if radius < 10 or radius > 200:
+                            continue
+
+                        # Check which endpoints are in watermark and could be connected
+                        endpoints_i = [
+                            (curve_i['points'][0], 0),   # (point, index)
+                            (curve_i['points'][-1], -1)
+                        ]
+                        endpoints_j = [
+                            (curve_j['points'][0], 0),
+                            (curve_j['points'][-1], -1)
+                        ]
+
+                        # Find the best endpoint pair to connect
+                        best_connection = None
+                        best_score = float('inf')
+
+                        for ei, ei_idx in endpoints_i:
+                            for ej, ej_idx in endpoints_j:
+                                # Check if both endpoints are near the watermark boundary or inside it
+                                ei_in_wm = False
+                                ej_in_wm = False
+
+                                if 0 <= int(ei[0]) < 100 and 0 <= int(ei[1]) < 100:
+                                    # Check if endpoint is in watermark or very close to it
+                                    if watermark_mask[int(ei[1]), int(ei[0])]:
+                                        ei_in_wm = True
+                                    else:
+                                        # Check 3-pixel neighborhood for watermark
+                                        for dy in range(-3, 4):
+                                            for dx in range(-3, 4):
+                                                ny, nx = int(ei[1]) + dy, int(ei[0]) + dx
+                                                if 0 <= nx < 100 and 0 <= ny < 100:
+                                                    if watermark_mask[ny, nx]:
+                                                        ei_in_wm = True
+                                                        break
+                                            if ei_in_wm:
+                                                break
+
+                                if 0 <= int(ej[0]) < 100 and 0 <= int(ej[1]) < 100:
+                                    if watermark_mask[int(ej[1]), int(ej[0])]:
+                                        ej_in_wm = True
+                                    else:
+                                        for dy in range(-3, 4):
+                                            for dx in range(-3, 4):
+                                                ny, nx = int(ej[1]) + dy, int(ej[0]) + dx
+                                                if 0 <= nx < 100 and 0 <= ny < 100:
+                                                    if watermark_mask[ny, nx]:
+                                                        ej_in_wm = True
+                                                        break
+                                            if ej_in_wm:
+                                                break
+
+                                if not (ei_in_wm or ej_in_wm):
+                                    continue
+
+                                # Calculate how well these endpoints fit the circle
+                                dist_i = abs(np.sqrt((ei[0] - cx)**2 + (ei[1] - cy)**2) - radius)
+                                dist_j = abs(np.sqrt((ej[0] - cx)**2 + (ej[1] - cy)**2) - radius)
+                                fit_error = dist_i + dist_j
+
+                                # Also consider the angular separation (prefer arcs that make sense)
+                                angle_i = np.arctan2(ei[1] - cy, ei[0] - cx)
+                                angle_j = np.arctan2(ej[1] - cy, ej[0] - cx)
+                                angle_diff = abs(angle_j - angle_i)
+                                if angle_diff > np.pi:
+                                    angle_diff = 2 * np.pi - angle_diff
+
+                                # Prefer moderate angular separations (not too small, not too large)
+                                angle_score = abs(angle_diff - np.pi/2)  # Prefer ~90 degree arcs
+
+                                score = fit_error + angle_score * 10
+
+                                if score < best_score:
+                                    best_score = score
+                                    best_connection = {
+                                        'endpoints': (ei_idx, ej_idx),
+                                        'points': (ei, ej),
+                                        'fit_error': fit_error,
+                                        'angle_diff': angle_diff
+                                    }
+
+                        # If we found a good connection, create the arc
+                        if best_connection and best_connection['fit_error'] < 15:
+                            curve_connections.append({
+                                'curves': (i, j),
+                                'circle': (cx, cy, radius),
+                                'endpoints': best_connection['endpoints'],
+                                'endpoint_points': best_connection['points'],
+                                'fit_error': best_connection['fit_error'],
+                                'angle_diff': best_connection['angle_diff']
+                            })
+                            print(f"  Curves {i} and {j} fit same circle: center=({cx:.1f}, {cy:.1f}), radius={radius:.1f}, fit_error={best_connection['fit_error']:.1f}")
 
                 # Merge connected curves into continuous curves
                 if curve_connections:
@@ -352,41 +457,58 @@ def detect_geometric_features(corner, watermark_mask):
                                     queue.append(other)
                                     connections_used.append(conn)
 
-                        # If multiple curves connected, merge them
+                        # If multiple curves connected, merge them with circular arcs
                         if len(connected) > 1:
-                            # For now, keep as separate but mark the connection points
-                            # This is complex to merge properly, so we'll extend each curve to the meeting point
+                            # Merge curves using the circular arc connection
                             for conn in connections_used:
                                 i, j = conn['curves']
                                 ei_idx, ej_idx = conn['endpoints']
-                                meeting = conn['meeting_point']
+                                cx, cy, radius = conn['circle']
+                                ei, ej = conn['endpoint_points']
 
-                                # Extend curve i endpoint to meeting point
-                                if ei_idx == 0:  # Extend from start
-                                    detected_curves[i]['points'] = np.vstack([
-                                        np.array([meeting]),
-                                        detected_curves[i]['points']
-                                    ])
-                                else:  # Extend from end
-                                    detected_curves[i]['points'] = np.vstack([
-                                        detected_curves[i]['points'],
-                                        np.array([meeting])
-                                    ])
+                                # Trace the circular arc from curve i endpoint to curve j endpoint
+                                arc_points = trace_circular_arc((cx, cy), radius, ei, ej, num_points=50)
 
-                                # Extend curve j endpoint to meeting point
-                                if ej_idx == 0:  # Extend from start
-                                    detected_curves[j]['points'] = np.vstack([
-                                        np.array([meeting]),
-                                        detected_curves[j]['points']
-                                    ])
-                                else:  # Extend from end
-                                    detected_curves[j]['points'] = np.vstack([
-                                        detected_curves[j]['points'],
-                                        np.array([meeting])
-                                    ])
+                                # Build the merged curve:
+                                # - If ei_idx == 0, we connect from the start of curve i
+                                # - If ei_idx == -1, we connect from the end of curve i
+                                # - Same for curve j with ej_idx
+
+                                curve_i_points = detected_curves[i]['points']
+                                curve_j_points = detected_curves[j]['points']
+
+                                # Determine the order: curve_i -> arc -> curve_j
+                                if ei_idx == 0:
+                                    # Start of curve i, so reverse it
+                                    curve_i_ordered = curve_i_points[::-1]
+                                else:
+                                    # End of curve i, use as is
+                                    curve_i_ordered = curve_i_points
+
+                                if ej_idx == 0:
+                                    # Start of curve j, use as is
+                                    curve_j_ordered = curve_j_points
+                                else:
+                                    # End of curve j, so reverse it
+                                    curve_j_ordered = curve_j_points[::-1]
+
+                                # Merge: curve_i + arc + curve_j
+                                merged_points = np.vstack([
+                                    curve_i_ordered,
+                                    arc_points,
+                                    curve_j_ordered
+                                ])
+
+                                # Update curve i with the merged result, mark curve j for removal
+                                detected_curves[i]['points'] = merged_points
+                                detected_curves[i]['length'] = cv2.arcLength(merged_points.astype(np.float32).reshape(-1, 1, 2), False)
+                                detected_curves[j]['points'] = np.array([])  # Mark for removal
 
             except Exception as e:
                 print(f"WARNING: Curve extension failed: {e}")
+
+            # Remove empty curves (marked for removal)
+            detected_curves = [c for c in detected_curves if len(c['points']) > 0]
 
         # Return both lines and curves
         result = {
@@ -403,124 +525,135 @@ def detect_geometric_features(corner, watermark_mask):
         return None
 
 
-def find_segments(corner, template, quantization=None, core_threshold=0.15):
+def create_partitions(watermark_mask, lines, curves):
     """
-    Find color segments in the watermark region.
+    Partition the watermark region using geometric features as hard boundaries.
 
     Args:
-        corner: 100x100x3 RGB image array (corner of the image)
-        template: 100x100 alpha mask (watermark template)
-        quantization: Color quantization step size. If None, automatically determined
-                     based on color variance (default: None)
-        core_threshold: Alpha threshold for core watermark pixels (default: 0.15)
+        watermark_mask: Boolean mask of watermark pixels
+        lines: List of line segments ((x1,y1), (x2,y2))
+        curves: List of curve dicts with 'points' key
 
     Returns:
-        dict with:
-            - segments: 100x100 array with segment IDs (-1 for non-watermark)
-            - segment_info: list of dicts with 'id', 'size', 'mask', 'centroid', 'color'
-            - core_mask: boolean mask of core watermark pixels
-            - edge_mask: boolean mask of edge watermark pixels
+        partition_map: Integer array same shape as watermark_mask, with partition IDs (0, 1, 2, ...)
+                      Pixels separated by lines/curves get different IDs. -1 for non-watermark.
+    """
+    h, w = watermark_mask.shape
+
+    # If no geometric features, everything is one partition
+    if not lines and not curves:
+        partition_map = np.full((h, w), -1, dtype=int)
+        partition_map[watermark_mask] = 0
+        return partition_map
+
+    # Create a barrier map: mark pixels ON or very close to lines/curves as barriers
+    barrier_map = np.zeros((h, w), dtype=bool)
+
+    # Add line barriers
+    for line in lines:
+        (x1, y1), (x2, y2) = line
+        # Draw thick line (2 pixels wide) to ensure proper separation
+        num_points = int(np.sqrt((x2-x1)**2 + (y2-y1)**2) * 2)
+        if num_points < 2:
+            continue
+        xs = np.linspace(x1, x2, num_points)
+        ys = np.linspace(y1, y2, num_points)
+        for x, y in zip(xs, ys):
+            ix, iy = int(round(x)), int(round(y))
+            if 0 <= ix < w and 0 <= iy < h:
+                barrier_map[iy, ix] = True
+                # Make it 2-pixels thick for better separation
+                for di in [-1, 0, 1]:
+                    for dj in [-1, 0, 1]:
+                        ni, nj = iy + di, ix + dj
+                        if 0 <= ni < h and 0 <= nj < w:
+                            barrier_map[ni, nj] = True
+
+    # Add curve barriers
+    for curve in curves:
+        curve_points = curve['points']
+        for x, y in curve_points:
+            ix, iy = int(round(x)), int(round(y))
+            if 0 <= ix < w and 0 <= iy < h:
+                barrier_map[iy, ix] = True
+                # Make it 2-pixels thick for better separation
+                for di in [-1, 0, 1]:
+                    for dj in [-1, 0, 1]:
+                        ni, nj = iy + di, ix + dj
+                        if 0 <= ni < h and 0 <= nj < w:
+                            barrier_map[ni, nj] = True
+
+    # Create regions: watermark pixels that are NOT barriers
+    connectable_region = watermark_mask & (~barrier_map)
+
+    # Run connected components to find partitions
+    structure = np.ones((3, 3), dtype=int)  # 8-connectivity
+    labeled, num_partitions = connected_components_label(connectable_region, structure=structure)
+
+    # Create final partition map
+    partition_map = np.full((h, w), -1, dtype=int)
+    partition_map[connectable_region] = labeled[connectable_region] - 1  # Make 0-indexed
+
+    # Handle barrier pixels: assign them to nearest partition
+    barrier_pixels = np.argwhere(watermark_mask & barrier_map)
+    if len(barrier_pixels) > 0 and num_partitions > 0:
+        partition_pixels = np.argwhere(partition_map >= 0)
+        from scipy.spatial import cKDTree
+        if len(partition_pixels) > 0:
+            tree = cKDTree(partition_pixels)
+            distances, indices = tree.query(barrier_pixels)
+            for i, (by, bx) in enumerate(barrier_pixels):
+                nearest_py, nearest_px = partition_pixels[indices[i]]
+                partition_map[by, bx] = partition_map[nearest_py, nearest_px]
+
+    return partition_map
+
+
+def find_segments(corner, template, quantization=None, core_threshold=0.15):
+    """
+    Find color segments in the watermark region using geometric-feature-based partitioning.
+
+    Key principle: Geometric features (lines/curves) create HARD BOUNDARIES that partition
+    the space. Segmentation and merging happen INDEPENDENTLY within each partition.
     """
     core_mask = template > core_threshold
     edge_mask = (template > 0.005) & (template <= core_threshold)
+    watermark_mask = (template > 0.005)
 
     # Auto-determine quantization based on color variance if not specified
-    color_std = None  # Will be used later for dynamic threshold adjustment
+    color_std = None
     if quantization is None:
         watermark_colors = corner[core_mask]
         if len(watermark_colors) > 0:
-            # Calculate two key metrics:
-            # 1. Overall color diversity (standard deviation)
             color_std = np.std(watermark_colors, axis=0).mean()
-
-            # 2. Number of unique colors at q=15 (potential segments)
-            # This helps detect when coarse quantization would merge distinct colors
             quantized_15 = (watermark_colors // 15) * 15
             unique_colors_q15 = len(np.unique(quantized_15.view(np.dtype((np.void,
                                                 quantized_15.dtype.itemsize * 3)))))
 
-            # Hybrid approach: Use BOTH metrics for better detection
-            # Fine quantization (q=15) when either:
-            #   - Many distinct color regions (unique_q15 > 12), OR
-            #   - High color diversity (std > 30)
-            # Medium quantization (q=20) when either:
-            #   - Some color regions (unique_q15 > 6), OR
-            #   - Moderate diversity (std > 12)
-            # Coarse quantization (q=30) for simple/uniform colors
-            #
-            # Note: Lower thresholds since we're analyzing core_mask which excludes
-            # edges and may undercount color diversity. Threshold of >12 for unique_q15
-            # typically indicates 3+ distinct color regions after merging.
-
             if unique_colors_q15 > 12 or color_std > 30:
-                quantization = 15  # Fine - preserves distinct color regions
+                quantization = 15
                 reason = f'unique_q15={unique_colors_q15}, std={color_std:.1f}'
             elif unique_colors_q15 > 6 or color_std > 12:
-                quantization = 20  # Medium
+                quantization = 20
                 reason = f'unique_q15={unique_colors_q15}, std={color_std:.1f}'
             else:
-                quantization = 30  # Coarse - simple colors
+                quantization = 30
                 reason = f'unique_q15={unique_colors_q15}, std={color_std:.1f}'
 
             print(f'Auto-selected quantization: {quantization} ({reason})')
         else:
-            quantization = 20  # Fallback
+            quantization = 20
     else:
-        # If quantization was provided, still calculate color_std for threshold adjustment
         watermark_colors = corner[core_mask]
         if len(watermark_colors) > 0:
             color_std = np.std(watermark_colors, axis=0).mean()
 
-    # Quantize colors
-    color_map = (corner // quantization) * quantization
-    unique_colors = np.unique(color_map[core_mask].reshape(-1, 3), axis=0)
-    
-    # Initialize segments array
-    segments = np.full(corner.shape[:2], -1, dtype=int)
-    segment_info = []
-    segment_id = 0
-    
-    # Find connected components for each quantized color
-    for color in unique_colors:
-        color_mask = np.all(color_map == color, axis=2) & core_mask
-        if np.sum(color_mask) < 3:
-            continue
-        
-        structure = np.ones((3, 3), dtype=int)  # 8-connectivity
-        labeled, num_features = connected_components_label(color_mask, structure=structure)
-        
-        for component_id in range(1, num_features + 1):
-            component_mask = (labeled == component_id)
-            if np.sum(component_mask) >= 3:
-                segments[component_mask] = segment_id
-                centroid = np.mean(np.argwhere(component_mask), axis=0)
-                segment_info.append({
-                    'id': segment_id,
-                    'size': np.sum(component_mask),
-                    'mask': component_mask,
-                    'centroid': centroid,
-                    'color': tuple(color)
-                })
-                segment_id += 1
-    
-    print(f'Found {len(segment_info)} initial segments')
-
-    # Determine if we should use boundary checking based on image variance FIRST
-    # High variance images don't benefit from boundary color checks
+    # Calculate background variance
     bg_mask = ~(template > 0.01)
     bg_pixels = corner[bg_mask]
     bg_variance = np.mean(np.std(bg_pixels, axis=0))
-    wm_pixels = corner[core_mask]
-    wm_variance = np.mean(np.std(wm_pixels, axis=0))
 
-    # Use boundary checking only for low-variance images with distinct backgrounds
-    use_boundary_checking = (bg_variance < 30) and (wm_variance < 25)
-
-    if not use_boundary_checking:
-        print(f'  Skipping boundary checking for high-variance image (bg_var={bg_variance:.1f}, wm_var={wm_variance:.1f})')
-
-    # Detect geometric features EARLY to use during all merge phases
-    watermark_mask = (template > 0.005)
+    # Detect geometric features FIRST
     geometry_result = detect_geometric_features(corner, watermark_mask)
 
     detected_lines = []
@@ -531,849 +664,157 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         total_features = len(detected_lines) + len(detected_curves)
         print(f'Detected {len(detected_lines)} lines and {len(detected_curves)} curves ({total_features} total boundaries)')
 
-        # Filter to only use "full lines" (long lines that span across the image)
-        # Short corner segments shouldn't split the main watermark regions
-        full_lines = []
-        for line in detected_lines:
-            (x1, y1), (x2, y2) = line
-            length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-            # Only use lines that span at least 60% of the image dimension
-            if length >= 60:
-                full_lines.append(line)
-
-        # All curves are considered "full" features since they're already filtered for significance
-        if full_lines or detected_curves:
-            print(f'  Using {len(full_lines)} full lines and {len(detected_curves)} curves for splitting (ignoring {len(detected_lines) - len(full_lines)} short corner segments)')
-
-            # Split segments that span across geometric boundaries
-            # This is critical because initial segmentation only uses color,
-            # so pixels on opposite sides of a line can be in the same segment
-            new_segment_info = []
-            new_segments = segments.copy()
-            next_segment_id = segment_id
-
-            for info in segment_info:
-                seg_mask = info['mask']
-                seg_pixels = np.argwhere(seg_mask)
-
-                if len(seg_pixels) == 0:
-                    continue
-
-                # For each pixel, compute which side of each line it's on
-                # Group pixels by their "side signature"
-                pixel_groups = {}  # side_signature -> list of pixel coords
-
-                for py, px in seg_pixels:
-                    # Compute side signature: tuple of which side of each line
-                    side_signature = []
-                    for line in full_lines:  # Only use full lines, not corner segments
-                        (x1, y1), (x2, y2) = line
-                        cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-                        # Use sign to determine side: -1, 0, or 1
-                        side = 1 if cross > 1.0 else (-1 if cross < -1.0 else 0)
-                        side_signature.append(side)
-
-                    side_signature = tuple(side_signature)
-                    if side_signature not in pixel_groups:
-                        pixel_groups[side_signature] = []
-                    pixel_groups[side_signature].append((py, px))
-
-                # If all pixels have the same signature, check if color variation suggests a split
-                if len(pixel_groups) == 1 and len(seg_pixels) > 20:
-                    # Check if actual pixel colors vary significantly across geometric boundaries
-                    for line in full_lines:
-                        (x1, y1), (x2, y2) = line
-
-                        # Separate pixels by which side of this specific line they're on
-                        left_pixels = []
-                        right_pixels = []
-                        for py, px in seg_pixels:
-                            cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-                            if cross > 1.0:
-                                right_pixels.append((py, px))
-                            elif cross < -1.0:
-                                left_pixels.append((py, px))
-
-                        # If both sides have sufficient pixels, check color difference
-                        if len(left_pixels) > 5 and len(right_pixels) > 5:
-                            # Sample colors from each side
-                            left_colors = [corner[py, px] for py, px in left_pixels[:20]]
-                            right_colors = [corner[py, px] for py, px in right_pixels[:20]]
-
-                            left_mean = np.mean(left_colors, axis=0)
-                            right_mean = np.mean(right_colors, axis=0)
-
-                            color_diff = np.max(np.abs(left_mean - right_mean))
-
-                            # Debug: always print the color difference
-                            if len(left_pixels) + len(right_pixels) == len(seg_pixels) - 10:  # Most pixels accounted for
-                                print(f'    Segment {info["id"]}: left={len(left_pixels)}px, right={len(right_pixels)}px, color_diff={color_diff:.1f}')
-
-                            # If colors differ by more than 3, split by this line
-                            if color_diff > 3:
-                                print(f'  Segment {info["id"]} has color variation (diff={color_diff:.1f}) across line, forcing split')
-                                pixel_groups = {}
-                                for py, px in seg_pixels:
-                                    cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-                                    side = 1 if cross > 1.0 else (-1 if cross < -1.0 else 0)
-                                    side_tuple = (side,)
-                                    if side_tuple not in pixel_groups:
-                                        pixel_groups[side_tuple] = []
-                                    pixel_groups[side_tuple].append((py, px))
-                                break  # Found a line to split by
-
-                # If all pixels still have the same signature, no split needed
-                if len(pixel_groups) == 1:
-                    new_segment_info.append(info)
-                    continue
-
-                # Split into multiple segments
-                print(f'  Splitting segment {info["id"]} into {len(pixel_groups)} parts across geometric boundaries')
-
-                # First, clear all pixels from this segment (set to -1)
-                # This ensures pixels in tiny fragments (<3) don't remain with old ID
-                new_segments[seg_mask] = -1
-
-                for i, (sig, pixels) in enumerate(pixel_groups.items()):
-                    if len(pixels) < 3:  # Skip tiny fragments
-                        continue
-
-                    # Create new segment
-                    new_mask = np.zeros_like(seg_mask)
-                    for py, px in pixels:
-                        new_mask[py, px] = True
-
-                    new_id = next_segment_id if i > 0 else info['id']
-                    if i > 0:
-                        next_segment_id += 1
-
-                    new_segments[new_mask] = new_id
-                    centroid = np.mean(pixels, axis=0)
-                    new_segment_info.append({
-                        'id': new_id,
-                        'size': len(pixels),
-                        'mask': new_mask,
-                        'centroid': centroid,
-                        'color': info['color']
-                    })
-
-            segment_info = new_segment_info
-            segments = new_segments
-            segment_id = next_segment_id
-            print(f'After geometric splitting: {len(segment_info)} segments')
-
-    # Helper function to check if a segment spans across any geometric line
-    # Helper functions for curve boundary checking
-    def point_side_of_curve(px, py, curve_points):
-        """
-        Determine which side of a curve a point is on.
-        Returns: 1 for one side, -1 for other side, based on nearest curve segment.
-        """
-        if len(curve_points) < 2:
-            return 0
-
-        # Find the nearest segment on the curve
-        min_dist = float('inf')
-        nearest_side = 0
-
-        for i in range(len(curve_points) - 1):
-            x1, y1 = curve_points[i]
-            x2, y2 = curve_points[i + 1]
-
-            # Use cross product to determine side
-            cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-
-            # Calculate distance to segment
-            # Vector from point1 to test point
-            dx, dy = px - x1, py - y1
-            # Vector of the segment
-            sx, sy = x2 - x1, y2 - y1
-            seg_length_sq = sx * sx + sy * sy
-
-            if seg_length_sq > 0:
-                # Project point onto segment
-                t = max(0, min(1, (dx * sx + dy * sy) / seg_length_sq))
-                proj_x, proj_y = x1 + t * sx, y1 + t * sy
-                dist = np.sqrt((px - proj_x)**2 + (py - proj_y)**2)
-
-                if dist < min_dist:
-                    min_dist = dist
-                    nearest_side = 1 if cross > 0 else -1
-
-        return nearest_side
-
-    def segment_spans_curve(info, curves):
-        """Check if a single segment has pixels on both sides of any curve."""
-        if not curves:
-            return False
-
-        mask = info['mask']
-        pixels_y, pixels_x = np.where(mask)
-
-        for curve in curves:
-            curve_points = curve['points']
-            if len(curve_points) < 2:
-                continue
-
-            sides = set()
-            for py, px in zip(pixels_y, pixels_x):
-                side = point_side_of_curve(px, py, curve_points)
-                if side != 0:
-                    sides.add(side)
-
-            # If pixels are on both sides, segment spans the curve
-            if len(sides) > 1:
-                return True
-
-        return False
-
-    def segment_spans_line(info, lines):
-        """Check if a single segment has pixels on both sides of any line."""
-        if not lines:
-            return False
-
-        mask = info['mask']
-        pixels_y, pixels_x = np.where(mask)
-
-        for line in lines:
-            (x1, y1), (x2, y2) = line
-
-            sides = set()
-            for py, px in zip(pixels_y, pixels_x):
-                cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-                if abs(cross) > 1.0:
-                    sides.add(1 if cross > 0 else -1)
-
-            # If pixels are on both sides, segment spans the line
-            if len(sides) > 1:
-                return True
-
-        return False
-
-    # Helper function to check if two segments are separated by geometric lines
-    def segments_separated_by_geometry(info1, info2, lines, curves=None):
-        """Check if segments span across a line/curve or are on opposite sides."""
-        if not lines and not curves:
-            return False
-
-        # First check if either segment itself spans a line or curve
-        # (Don't merge with or into segments that cross boundaries)
-        if segment_spans_line(info1, lines) or segment_spans_line(info2, lines):
-            return True
-
-        if curves and (segment_spans_curve(info1, curves) or segment_spans_curve(info2, curves)):
-            return True
-
-        # Check if MERGING these segments would create a segment that spans a line
-        # This is critical: even if neither segment currently spans a line,
-        # if they're on opposite sides, merging them WOULD create a spanning segment
-
-        # Debug: track if we even check (disabled by default)
-        debug_geometry = False
-        if debug_geometry and len(lines) > 0:
-            print(f'    Checking if merge of seg {info1["id"]} ({np.sum(info1["mask"])}px) + seg {info2["id"]} ({np.sum(info2["mask"])}px) would span {len(lines)} lines')
-
-        for line_idx, line in enumerate(lines):
-            (x1, y1), (x2, y2) = line
-
-            # Get pixel coordinates from both segments
-            mask1 = info1['mask']
-            mask2 = info2['mask']
-            pixels1_y, pixels1_x = np.where(mask1)
-            pixels2_y, pixels2_x = np.where(mask2)
-
-            # For small segments, check all pixels. For large, use stratified sampling
-            # that includes extremes to ensure we detect spanning
-            sample_size = 100
-
-            def stratified_sample(pix_y, pix_x, n):
-                """Sample pixels including extremes to detect boundary spanning."""
-                if len(pix_x) <= n:
-                    return pix_y, pix_x
-
-                # Always include extremes (min/max x and y)
-                extremes_idx = []
-                extremes_idx.append(np.argmin(pix_x))
-                extremes_idx.append(np.argmax(pix_x))
-                extremes_idx.append(np.argmin(pix_y))
-                extremes_idx.append(np.argmax(pix_y))
-                extremes_idx = list(set(extremes_idx))  # Remove duplicates
-
-                # Random sample the rest
-                remaining = n - len(extremes_idx)
-                if remaining > 0:
-                    mask = np.ones(len(pix_x), dtype=bool)
-                    mask[extremes_idx] = False
-                    remaining_idx = np.where(mask)[0]
-                    if len(remaining_idx) > remaining:
-                        sampled_idx = np.random.choice(remaining_idx, remaining, replace=False)
-                        all_idx = np.concatenate([extremes_idx, sampled_idx])
-                    else:
-                        all_idx = np.arange(len(pix_x))
-                else:
-                    all_idx = extremes_idx
-
-                return pix_y[all_idx], pix_x[all_idx]
-
-            pixels1_y, pixels1_x = stratified_sample(pixels1_y, pixels1_x, sample_size)
-            pixels2_y, pixels2_x = stratified_sample(pixels2_y, pixels2_x, sample_size)
-
-            # Combine pixels to simulate the merged segment
-            combined_y = np.concatenate([pixels1_y, pixels2_y])
-            combined_x = np.concatenate([pixels1_x, pixels2_x])
-
-            # Check if the combined (merged) segment would span this line
-            sides = set()
-            cross_values = []  # For debugging
-            for py, px in zip(combined_y, combined_x):
-                cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-                if abs(cross) > 1.0:  # Not on the line
-                    sides.add(1 if cross > 0 else -1)
-                    if len(cross_values) < 5:  # Store first few for debug
-                        cross_values.append(cross)
-
-            # Debug: show what we found for this line (disabled by default)
-            if debug_geometry:
-                if len(sides) == 1:
-                    # Show coordinate ranges to understand why we're not detecting spanning
-                    min_x, max_x = np.min(combined_x), np.max(combined_x)
-                    min_y, max_y = np.min(combined_y), np.max(combined_y)
-                    print(f'      Line {line_idx} ({x1},{y1})->({x2},{y2}): sides={sides}, coords: x[{min_x},{max_x}] y[{min_y},{max_y}]')
-                else:
-                    print(f'      Line {line_idx} ({x1},{y1})->({x2},{y2}): sides={sides}, sample_cross={cross_values[:3]}')
-
-            # If the merged segment would have pixels on both sides, prevent the merge
-            if len(sides) > 1:
-                if debug_geometry:
-                    print(f'    Preventing merge of seg {info1["id"]} + seg {info2["id"]}: would span line {line_idx} (sides={sides})')
-                return True
-
-        return False
-
-    # First pass: Merge segments with identical quantized colors (even if not adjacent)
-    # This handles cases where the same color appears in multiple disconnected regions
-    # BUT: For low-variance images, don't merge if segments are on opposite sides
-    segment_colors = {info['id']: info['color'] for info in segment_info}
-    color_to_segments = {}
-    for seg_id, color in segment_colors.items():
-        color_key = tuple(color)
-        if color_key not in color_to_segments:
-            color_to_segments[color_key] = []
-        color_to_segments[color_key].append(seg_id)
-
-    # Merge segments with identical colors
-    identical_color_merges = 0
-    for color_key, seg_ids in color_to_segments.items():
-        if len(seg_ids) > 1:
-            if use_boundary_checking:
-                # For low-variance images, check if segments are on opposite sides
-                # Group by spatial region (left vs right)
-                left_segs = []
-                right_segs = []
-                for seg_id in seg_ids:
-                    info = next(i for i in segment_info if i['id'] == seg_id)
-                    cy, cx = info['centroid']
-                    if cx < 48:
-                        left_segs.append(seg_id)
-                    elif cx > 52:
-                        right_segs.append(seg_id)
-                    else:
-                        # Center - add to larger group or left if equal
-                        if len(left_segs) > len(right_segs):
-                            left_segs.append(seg_id)
-                        else:
-                            right_segs.append(seg_id)
-
-                # Merge within each spatial group separately
-                for group in [left_segs, right_segs]:
-                    if len(group) > 1:
-                        root_seg = group[0]
-                        for seg_id in group[1:]:
-                            segments[segments == seg_id] = root_seg
-                            identical_color_merges += 1
-            else:
-                # High-variance images: merge identical colors, but respect geometric boundaries
-                if detected_lines:
-                    # Check geometric separation for each pair
-                    merge_groups = []  # List of lists - each sublist is a group to merge
-                    for seg_id in seg_ids:
-                        info = next(i for i in segment_info if i['id'] == seg_id)
-                        # Find which group this segment belongs to
-                        found_group = False
-                        for group in merge_groups:
-                            # Check if adding this segment to the group would create a combined
-                            # group that spans geometric boundaries
-                            # Collect all segments in the group
-                            group_infos = [next(i for i in segment_info if i['id'] == gid) for gid in group]
-
-                            # Create combined mask for the entire group
-                            group_mask = np.zeros_like(group_infos[0]['mask'], dtype=bool)
-                            for ginfo in group_infos:
-                                group_mask |= ginfo['mask']
-
-                            group_combined_info = {'id': f"group_{group[0]}", 'mask': group_mask}
-
-                            # Check if adding seg_id to this group would span lines
-                            if not segments_separated_by_geometry(group_combined_info, info, detected_lines, detected_curves):
-                                group.append(seg_id)
-                                found_group = True
-                                break
-                        if not found_group:
-                            # Start a new group
-                            merge_groups.append([seg_id])
-
-                    # Merge within each group
-                    for group in merge_groups:
-                        if len(group) > 1:
-                            root_seg = group[0]
-                            for seg_id in group[1:]:
-                                segments[segments == seg_id] = root_seg
-                                identical_color_merges += 1
-                else:
-                    # No geometry detected: merge all identical colors unconditionally
-                    root_seg = seg_ids[0]
-                    for seg_id in seg_ids[1:]:
-                        segments[segments == seg_id] = root_seg
-                        identical_color_merges += 1
-
-    # Rebuild segment_info after identical color merges
-    if identical_color_merges > 0:
-        # Find all unique segment IDs that still exist after merging
-        surviving_segments = np.unique(segments[segments >= 0])
-
-        new_segment_info = []
-        for seg_id in surviving_segments:
-            merged_mask = (segments == seg_id)
-            if np.sum(merged_mask) > 0:
-                # Find the original color for this segment
-                original_info = next((i for i in segment_info if i['id'] == seg_id), None)
-                if original_info:
-                    new_segment_info.append({
-                        'id': seg_id,
-                        'size': np.sum(merged_mask),
-                        'mask': merged_mask,
-                        'centroid': np.mean(np.argwhere(merged_mask), axis=0),
-                        'color': original_info['color']
-                    })
-        segment_info = new_segment_info
-        print(f'After merging {identical_color_merges} segments with identical colors: {len(segment_info)} segments')
-
-    # Second pass: Merge adjacent segments with similar colors
-    segment_colors = {info['id']: info['color'] for info in segment_info}
-
-    # Build adjacency graph
-    adjacency = set()
-    for info in segment_info:
-        seg_id = info['id']
-        seg_mask = info['mask']
-        dilated = binary_dilation(seg_mask, iterations=1)
-        adjacent_region = dilated & ~seg_mask & (segments >= 0)
-        adjacent_segs = np.unique(segments[adjacent_region])
-        for adj_seg in adjacent_segs:
-            if adj_seg != seg_id:
-                adjacency.add((min(seg_id, adj_seg), max(seg_id, adj_seg)))
-
-    # Dynamically adjust merging thresholds based on color variance
-    # Low variance images (std < 20): Strict thresholds to avoid over-merging similar colors
-    # High variance images (std > 35): Permissive thresholds since colors are naturally distinct
-    # Medium variance images: Balanced thresholds
-    if color_std is not None:
-        if color_std < 20:
-            # Low variance: Very strict (e.g., fibbing.png with std=11.1)
-            COLOR_SIMILARITY_THRESHOLD = 15
-            MAX_GROUP_SPAN = 20
-        elif color_std < 35:
-            # Medium variance: Balanced
-            COLOR_SIMILARITY_THRESHOLD = 20
-            MAX_GROUP_SPAN = 25
-        else:
-            # High variance: More permissive (e.g., double cleanse.png with std=42.8)
-            COLOR_SIMILARITY_THRESHOLD = 25
-            MAX_GROUP_SPAN = 30
-        print(f'Dynamic merge thresholds: similarity={COLOR_SIMILARITY_THRESHOLD}, span={MAX_GROUP_SPAN} (std={color_std:.1f})')
-    else:
-        # Fallback to balanced thresholds if color_std unavailable
-        COLOR_SIMILARITY_THRESHOLD = 20
-        MAX_GROUP_SPAN = 25
-    merge_map = {info['id']: info['id'] for info in segment_info}
-    # Track the color range of each merged group to prevent over-merging
-    group_color_min = {info['id']: np.array(info['color'], dtype=np.int32) for info in segment_info}
-    group_color_max = {info['id']: np.array(info['color'], dtype=np.int32) for info in segment_info}
-    # For size-aware boundary checking
-    segment_sizes = {info['id']: info['size'] for info in segment_info}
-
-    def find_root(x):
-        if merge_map[x] != x:
-            merge_map[x] = find_root(merge_map[x])
-        return merge_map[x]
-
-    for seg1, seg2 in adjacency:
-        color1 = np.array(segment_colors[seg1], dtype=np.int32)
-        color2 = np.array(segment_colors[seg2], dtype=np.int32)
-        color_diff = np.max(np.abs(color1 - color2))
-        if color_diff <= COLOR_SIMILARITY_THRESHOLD:
-            root1 = find_root(seg1)
-            root2 = find_root(seg2)
-            if root1 != root2:
-                # For low-variance images, check if segments are on different backgrounds
-                # by comparing colors in a ring around the watermark
-                skip_merge = False
-                if use_boundary_checking:
-                    # Get segment centroids
-                    info1 = next((i for i in segment_info if i['id'] == seg1), None)
-                    info2 = next((i for i in segment_info if i['id'] == seg2), None)
-                    if info1 and info2:
-                        cy1, cx1 = info1['centroid']
-                        cy2, cx2 = info2['centroid']
-
-                        # Simple heuristic: if segments are on opposite sides (> 30px apart)
-                        # and have different quantized colors, don't merge
-                        horizontal_dist = abs(cx1 - cx2)
-                        vertical_dist = abs(cy1 - cy2)
-                        size1 = segment_sizes.get(seg1, 0)
-                        size2 = segment_sizes.get(seg2, 0)
-                        min_size = min(size1, size2)
-
-                        # Be strict for large segments far apart, permissive for small segments
-                        if horizontal_dist > 30 or vertical_dist > 30:
-                            if min_size >= 50 and color_diff > 10:
-                                skip_merge = True
-
-                # Check if segments are separated by geometric boundaries
-                # This check applies to ALL images, not just low-variance ones
-                if not skip_merge and detected_lines:
-                    # CRITICAL: Check the MERGED GROUPS (root1 and root2), not just seg1 and seg2
-                    # Collect all segments that belong to root1 and root2
-                    group1_segments = [i for i in segment_info if find_root(i['id']) == root1]
-                    group2_segments = [i for i in segment_info if find_root(i['id']) == root2]
-
-                    if group1_segments and group2_segments:
-                        # Create combined info for each group by merging all masks
-                        group1_mask = np.zeros_like(group1_segments[0]['mask'], dtype=bool)
-                        for seg_info in group1_segments:
-                            group1_mask |= seg_info['mask']
-
-                        group2_mask = np.zeros_like(group2_segments[0]['mask'], dtype=bool)
-                        for seg_info in group2_segments:
-                            group2_mask |= seg_info['mask']
-
-                        # Create temporary info objects for the merged groups
-                        group1_info = {'id': root1, 'mask': group1_mask}
-                        group2_info = {'id': root2, 'mask': group2_mask}
-
-                        if segments_separated_by_geometry(group1_info, group2_info, detected_lines, detected_curves):
-                            skip_merge = True
-                elif not skip_merge:
-                    pass  # No detected_lines to check
-                else:
-                    pass  # skip_merge already True
-
-                if not skip_merge:
-                    # Check if merging would create too large a color span
-                    new_min = np.minimum(group_color_min[root1], group_color_min[root2])
-                    new_max = np.maximum(group_color_max[root1], group_color_max[root2])
-                    span = np.max(new_max - new_min)
-
-                    # Only merge if the resulting group's color span is reasonable
-                    if span <= MAX_GROUP_SPAN:
-                        merge_map[root2] = root1
-                        # Update color range and size of the merged group
-                        group_color_min[root1] = new_min
-                        group_color_max[root1] = new_max
-                        segment_sizes[root1] = segment_sizes.get(root1, 0) + segment_sizes.get(root2, 0)
-    
-    # Apply merges to segment map
-    for info in segment_info:
-        seg_id = info['id']
-        root = find_root(seg_id)
-        if root != seg_id:
-            segments[segments == seg_id] = root
-    
-    # Update segment_info to only include root segments
-    merged_segment_info = []
-    for info in segment_info:
-        root = find_root(info['id'])
-        if root == info['id']:
-            # This is a root, combine all merged segments
-            merged_mask = (segments == info['id'])
-            merged_segment_info.append({
-                'id': info['id'],
-                'size': np.sum(merged_mask),
-                'mask': merged_mask,
-                'centroid': np.mean(np.argwhere(merged_mask), axis=0),
-                'color': segment_colors[info['id']]
-            })
-    
-    segment_info = merged_segment_info
-    print(f'After merging similar adjacent segments: {len(segment_info)} segments')
-    
-    # Merge small interior segments
-    SMALL_SEGMENT_THRESHOLD = 10
-    segment_sizes = {info['id']: info['size'] for info in segment_info}
-    
-    # Find which segments touch the watermark boundary
-    full_watermark_mask = template > core_threshold
-    dilated_watermark = binary_dilation(full_watermark_mask, iterations=1)
-    boundary_mask = dilated_watermark & ~full_watermark_mask
-    
-    segments_touching_boundary = set()
-    for info in segment_info:
-        seg_id = info['id']
-        seg_mask = info['mask']
-        seg_dilated = binary_dilation(seg_mask, iterations=1)
-        if np.any(seg_dilated & boundary_mask):
-            segments_touching_boundary.add(seg_id)
-    
-    # Merge small interior segments into their largest neighbor
-    merged_small = []
-    for info in segment_info:
-        seg_id = info['id']
-        if segment_sizes[seg_id] <= SMALL_SEGMENT_THRESHOLD and seg_id not in segments_touching_boundary:
-            seg_mask = info['mask']
-            dilated = binary_dilation(seg_mask, iterations=1)
-            adjacent_region = dilated & ~seg_mask & (segments >= 0)
-            adjacent_segs = np.unique(segments[adjacent_region])
-
-            if len(adjacent_segs) > 0:
-                # Filter out adjacent segments separated by geometric boundaries
-                if detected_lines:
-                    valid_neighbors = []
-                    for neighbor_id in adjacent_segs:
-                        neighbor_info = next((s for s in segment_info if s['id'] == neighbor_id), None)
-                        if neighbor_info:
-                            if not segments_separated_by_geometry(info, neighbor_info, detected_lines, detected_curves):
-                                valid_neighbors.append(neighbor_id)
-                    # Skip merge if all neighbors are separated by geometric boundaries
-                    if not valid_neighbors:
-                        continue
-                    adjacent_segs = valid_neighbors
-
-                largest_neighbor = max(adjacent_segs, key=lambda s: segment_sizes.get(s, 0))
-                segments[seg_mask] = largest_neighbor
-                merged_small.append((seg_id, largest_neighbor, segment_sizes[seg_id]))
-                # Update sizes
-                for other_info in segment_info:
-                    if other_info['id'] == largest_neighbor:
-                        other_info['size'] += segment_sizes[seg_id]
-                        other_info['mask'] = (segments == largest_neighbor)
-                        segment_sizes[largest_neighbor] += segment_sizes[seg_id]
-                print(f"  Merged small interior segment {seg_id} ({segment_sizes[seg_id]}px) into segment {largest_neighbor}")
-    
-    # Remove merged segments from segment_info
-    merged_ids = set(m[0] for m in merged_small)
-    segment_info = [info for info in segment_info if info['id'] not in merged_ids]
-    
-    if merged_small:
-        print(f'After merging {len(merged_small)} small interior segments: {len(segment_info)} segments')
-    else:
-        print(f'No small interior segments to merge (still {len(segment_info)} segments)')
-
-    # Merge thin/sliver segments that create isolated pixel noise
-    # These are typically 1-2 pixels wide but may span many rows/columns
-    # They create visible artifacts when filled with slightly different colors
-    THIN_SEGMENT_SIZE_THRESHOLD = 20  # Very small segments
-    THIN_SEGMENT_ASPECT_RATIO = 5.0   # High aspect ratio (width/height or vice versa)
-
-    merged_thin = []
-    for info in segment_info[:]:  # Iterate over copy since we modify list
-        seg_id = info['id']
-        seg_mask = info['mask']
-        seg_size = info['size']
-
-        # Calculate bounding box to detect thin segments
-        coords = np.argwhere(seg_mask)
-        if len(coords) == 0:
+    # Filter to only use "full lines" (long lines that span across the image)
+    full_lines = []
+    for line in detected_lines:
+        (x1, y1), (x2, y2) = line
+        length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        if length >= 60:
+            full_lines.append(line)
+
+    if full_lines or detected_curves:
+        print(f'  Using {len(full_lines)} full lines and {len(detected_curves)} curves for partitioning')
+
+    # CREATE PARTITIONS - this is the key step
+    partition_map = create_partitions(core_mask, full_lines, detected_curves)
+    num_partitions = np.max(partition_map) + 1 if np.any(partition_map >= 0) else 0
+
+    print(f'Created {num_partitions} partitions based on geometric features')
+
+    # Quantize colors
+    color_map = (corner // quantization) * quantization
+
+    # Process each partition independently
+    segments = np.full(corner.shape[:2], -1, dtype=int)
+    segment_info = []
+    next_segment_id = 0
+
+    for partition_id in range(num_partitions):
+        partition_mask = (partition_map == partition_id) & core_mask
+        if np.sum(partition_mask) < 3:
             continue
 
-        y_coords, x_coords = coords[:, 0], coords[:, 1]
-        bbox_height = y_coords.max() - y_coords.min() + 1
-        bbox_width = x_coords.max() - x_coords.min() + 1
+        # Find color segments WITHIN this partition only
+        unique_colors = np.unique(color_map[partition_mask].reshape(-1, 3), axis=0)
 
-        # Calculate aspect ratio (always >= 1)
-        if bbox_width > 0 and bbox_height > 0:
-            aspect_ratio = max(bbox_width / bbox_height, bbox_height / bbox_width)
-        else:
-            aspect_ratio = 1.0
+        for color in unique_colors:
+            color_mask = np.all(color_map == color, axis=2) & partition_mask
+            if np.sum(color_mask) < 3:
+                continue
 
-        # Check if segment is thin (high aspect ratio) or very small
-        is_thin = aspect_ratio > THIN_SEGMENT_ASPECT_RATIO
-        is_very_small = seg_size < THIN_SEGMENT_SIZE_THRESHOLD
+            structure = np.ones((3, 3), dtype=int)
+            labeled, num_features = connected_components_label(color_mask, structure=structure)
 
-        if is_thin or is_very_small:
-            # Find adjacent segments
-            dilated = binary_dilation(seg_mask, iterations=1)
-            adjacent_region = dilated & ~seg_mask & (segments >= 0)
-            adjacent_segs = np.unique(segments[adjacent_region])
-
-            if len(adjacent_segs) > 0:
-                # Filter out adjacent segments separated by geometric boundaries
-                if detected_lines:
-                    valid_neighbors = []
-                    for neighbor_id in adjacent_segs:
-                        neighbor_info = next((s for s in segment_info if s['id'] == neighbor_id), None)
-                        if neighbor_info:
-                            if not segments_separated_by_geometry(info, neighbor_info, detected_lines, detected_curves):
-                                valid_neighbors.append(neighbor_id)
-                    # Skip merge if all neighbors are separated by geometric boundaries
-                    if not valid_neighbors:
-                        continue
-                    adjacent_segs = valid_neighbors
-
-                # Merge into largest adjacent neighbor
-                segment_sizes = {s['id']: s['size'] for s in segment_info}
-                largest_neighbor = max(adjacent_segs, key=lambda s: segment_sizes.get(s, 0))
-
-                # Perform merge
-                segments[seg_mask] = largest_neighbor
-                merged_thin.append((seg_id, largest_neighbor, seg_size, aspect_ratio))
-
-                # Update neighbor's info
-                for other_info in segment_info:
-                    if other_info['id'] == largest_neighbor:
-                        other_info['size'] += seg_size
-                        other_info['mask'] = (segments == largest_neighbor)
-
-                reason = 'thin' if is_thin else 'small'
-                print(f"  Merged {reason} segment {seg_id} ({seg_size}px, aspect={aspect_ratio:.1f}) into segment {largest_neighbor}")
-
-    # Remove merged segments from segment_info
-    merged_thin_ids = set(m[0] for m in merged_thin)
-    segment_info = [info for info in segment_info if info['id'] not in merged_thin_ids]
-
-    if merged_thin:
-        print(f'After merging {len(merged_thin)} thin/small segments: {len(segment_info)} segments')
-
-    # Assign all unassigned watermark pixels using region-based assignment with line boundaries
-    # Lines divide the watermark into regions, and pixels are assigned based on the
-    # predominant segment in their region
-    watermark_mask = (template > 0.005)  # All watermark pixels (core + edge)
-    unassigned_mask = watermark_mask & (segments == -1)
-    unassigned_count = np.sum(unassigned_mask)
-
-    if unassigned_count > 0:
-        # Detect geometric features (lines and curves) in the background
-        geometry_result = detect_geometric_features(corner, watermark_mask)
-        detected_lines = geometry_result.get('lines', []) if geometry_result else []
-        detected_curves = geometry_result.get('curves', []) if geometry_result else []
-
-        # Helper function to check which side of a line a point is on
-        def point_side_of_line(px, py, line):
-            """Return which side of the line the point is on.
-            Returns: positive = one side, negative = other side, 0 = on line"""
-            (x1, y1), (x2, y2) = line
-            # Cross product: (p - p1) × (p2 - p1)
-            return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-
-        # Helper function to check if two points are separated by any line
-        def points_separated_by_lines(p1x, p1y, p2x, p2y, lines):
-            """Check if two points are on opposite sides of any line."""
-            if not lines:
-                return False
-
-            for line in lines:
-                side1 = point_side_of_line(p1x, p1y, line)
-                side2 = point_side_of_line(p2x, p2y, line)
-
-                # If signs are opposite, they're separated by this line
-                # Only skip if BOTH points are very close to the line (likely on it)
-                both_on_line = abs(side1) < 0.01 and abs(side2) < 0.01
-
-                if not both_on_line:
-                    if (side1 > 0 and side2 < 0) or (side1 < 0 and side2 > 0):
-                        return True
-
-            return False
-
-        # Get coordinates of unassigned pixels
-        unassigned_coords = np.argwhere(unassigned_mask)
-
-        # Get coordinates of all assigned segment pixels
-        assigned_mask = watermark_mask & (segments != -1)
-        assigned_coords = np.argwhere(assigned_mask)
-        assigned_ids = segments[assigned_coords[:, 0], assigned_coords[:, 1]]
-
-        # For each unassigned pixel, find assigned pixels in the same region
-        for uy, ux in unassigned_coords:
-            # Find all assigned pixels that are NOT separated by any line
-            same_region_mask = []
-            same_region_segments = []
-
-            for i, (ay, ax) in enumerate(assigned_coords):
-                if detected_lines:
-                    separated = points_separated_by_lines(ux, uy, ax, ay, detected_lines)
-                    if not separated:
-                        same_region_mask.append(i)
-                        same_region_segments.append(assigned_ids[i])
-                else:
-                    same_region_mask.append(i)
-                    same_region_segments.append(assigned_ids[i])
-
-            # If we found pixels in the same region, use majority vote
-            if same_region_segments:
-                # Find the most common segment among reachable pixels
-                # Weight by inverse distance
-                same_region_coords = assigned_coords[same_region_mask]
-                distances = np.sqrt((same_region_coords[:, 0] - uy)**2 +
-                                   (same_region_coords[:, 1] - ux)**2)
-
-                # Count segments with distance weighting
-                segment_scores = {}
-                for seg_id, dist in zip(same_region_segments, distances):
-                    weight = 1.0 / (dist + 1.0)  # Add 1 to avoid division by zero
-                    segment_scores[seg_id] = segment_scores.get(seg_id, 0) + weight
-
-                # Choose segment with highest score
-                best_segment = max(segment_scores.keys(), key=lambda k: segment_scores[k])
-                segments[uy, ux] = best_segment
-            else:
-                # No pixels in same region - pixel is geometrically separated from all existing segments
-                # Create a new segment for this isolated region
-                # Find a new segment ID
-                new_seg_id = max([info['id'] for info in segment_info]) + 1 if segment_info else 0
-                segments[uy, ux] = new_seg_id
-
-                # Check if we need to add this new segment to segment_info
-                # (will be batched later if multiple unassigned pixels form the same new segment)
-                # For now, just mark the pixel - we'll rebuild segment_info after this loop
-
-        # Rebuild segment_info to include any new segments created for isolated regions
-        existing_seg_ids = set(info['id'] for info in segment_info)
-        all_seg_ids = np.unique(segments[segments >= 0])
-
-        # Update existing segments
-        for info in segment_info:
-            seg_id = info['id']
-            info['mask'] = (segments == seg_id)
-            info['size'] = np.sum(info['mask'])
-
-        # Add new segments that were created for geometrically isolated regions
-        for seg_id in all_seg_ids:
-            if seg_id not in existing_seg_ids:
-                mask = (segments == seg_id)
-                size = np.sum(mask)
-                if size > 0:
-                    # Calculate centroid and color for new segment
-                    coords = np.argwhere(mask)
-                    centroid = tuple(coords.mean(axis=0))
-                    color = tuple(corner[mask].mean(axis=0).astype(int))
-
+            for component_id in range(1, num_features + 1):
+                component_mask = (labeled == component_id)
+                if np.sum(component_mask) >= 3:
+                    segments[component_mask] = next_segment_id
+                    centroid = np.mean(np.argwhere(component_mask), axis=0)
                     segment_info.append({
-                        'id': int(seg_id),
-                        'size': int(size),
-                        'mask': mask,
+                        'id': next_segment_id,
+                        'size': np.sum(component_mask),
+                        'mask': component_mask,
                         'centroid': centroid,
-                        'color': color
+                        'color': tuple(color),
+                        'partition': partition_id  # Track which partition this segment belongs to
                     })
+                    next_segment_id += 1
 
-        method = 'region-based assignment with line boundaries' if detected_lines else 'nearest neighbor'
-        print(f'Assigned {unassigned_count} unassigned pixels using {method}')
-        if detected_lines:
-            print(f'  Used {len(detected_lines)} detected geometric boundaries as region dividers')
+    print(f'Found {len(segment_info)} initial segments across {num_partitions} partitions')
+
+    # Merge identical colors WITHIN each partition
+    merged_count = 0
+    for partition_id in range(num_partitions):
+        partition_segments = [s for s in segment_info if s.get('partition') == partition_id]
+
+        # Group by color
+        color_groups = {}
+        for seg in partition_segments:
+            color = seg['color']
+            if color not in color_groups:
+                color_groups[color] = []
+            color_groups[color].append(seg)
+
+        # Merge segments with same color in this partition
+        for color, seg_list in color_groups.items():
+            if len(seg_list) > 1:
+                # Keep first segment, merge others into it
+                primary_seg = seg_list[0]
+                for other_seg in seg_list[1:]:
+                    # Merge masks
+                    primary_seg['mask'] = primary_seg['mask'] | other_seg['mask']
+                    primary_seg['size'] += other_seg['size']
+                    # Update segments array
+                    segments[other_seg['mask']] = primary_seg['id']
+                    # Remove from segment_info
+                    segment_info.remove(other_seg)
+                    merged_count += 1
+
+                # Recalculate centroid
+                primary_seg['centroid'] = np.mean(np.argwhere(primary_seg['mask']), axis=0)
+
+    if merged_count > 0:
+        print(f'After merging {merged_count} segments with identical colors: {len(segment_info)} segments')
+
+    # Merge similar adjacent segments WITHIN each partition
+    if color_std is not None:
+        similarity_threshold = max(15, min(20, int(color_std * 0.6)))
+        span_threshold = max(20, min(25, int(color_std * 0.75)))
+        print(f'Dynamic merge thresholds: similarity={similarity_threshold}, span={span_threshold} (std={color_std:.1f})')
+    else:
+        similarity_threshold = 18
+        span_threshold = 23
+
+    merged_count = 0
+    for partition_id in range(num_partitions):
+        partition_segments = [s for s in segment_info if s.get('partition') == partition_id]
+
+        changed = True
+        while changed:
+            changed = False
+            for i, seg1 in enumerate(partition_segments):
+                if seg1 not in segment_info:  # Already merged
+                    continue
+                for j, seg2 in enumerate(partition_segments[i+1:], i+1):
+                    if seg2 not in segment_info:
+                        continue
+
+                    # Check if adjacent
+                    dilated1 = binary_dilation(seg1['mask'])
+                    if not np.any(dilated1 & seg2['mask']):
+                        continue
+
+                    # Check color similarity
+                    c1 = np.array(seg1['color'])
+                    c2 = np.array(seg2['color'])
+                    max_diff = np.max(np.abs(c1 - c2))
+                    span = np.max(np.abs(c1 - corner[bg_mask].mean(axis=0)))
+
+                    if max_diff <= similarity_threshold or span <= span_threshold:
+                        # Merge seg2 into seg1
+                        seg1['mask'] = seg1['mask'] | seg2['mask']
+                        seg1['size'] += seg2['size']
+                        segments[seg2['mask']] = seg1['id']
+                        seg1['centroid'] = np.mean(np.argwhere(seg1['mask']), axis=0)
+
+                        segment_info.remove(seg2)
+                        partition_segments.remove(seg2)
+                        merged_count += 1
+                        changed = True
+                        break
+                if changed:
+                    break
+
+    if merged_count > 0:
+        print(f'After merging similar adjacent segments: {len(segment_info)} segments')
 
     return {
         'segments': segments,
         'segment_info': segment_info,
         'core_mask': core_mask,
         'edge_mask': edge_mask,
-        'bg_variance': bg_variance
+        'bg_variance': bg_variance,
+        'detected_lines': detected_lines,
+        'detected_curves': detected_curves,
+        'partition_map': partition_map  # Include partition map for debugging
     }
