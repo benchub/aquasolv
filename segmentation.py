@@ -607,22 +607,22 @@ def create_partitions(watermark_mask, lines, curves):
                 partition_map[by, bx] = partition_map[nearest_py, nearest_px]
 
     # IMPORTANT: Extend partitions into boundary region (background pixels near watermark)
-    # This ensures boundary color sampling respects partition boundaries
+    # Use propagation approach: dilate each partition separately, respecting barriers
     if num_partitions > 0:
-        # Dilate watermark to get boundary region (where we sample colors from)
-        dilated_watermark = binary_dilation(watermark_mask, iterations=6)
-        boundary_region = dilated_watermark & ~watermark_mask
-        boundary_pixels = np.argwhere(boundary_region)
+        # Dilate each partition outward into boundary, but stop at barrier pixels
+        for iteration in range(6):  # 6 iterations matches boundary dilation
+            for partition_id in range(num_partitions):
+                # Get current partition pixels
+                partition_pixels = (partition_map == partition_id)
 
-        if len(boundary_pixels) > 0:
-            # Assign each boundary pixel to nearest partition
-            partition_pixels = np.argwhere(partition_map >= 0)
-            if len(partition_pixels) > 0:
-                tree = cKDTree(partition_pixels)
-                distances, indices = tree.query(boundary_pixels)
-                for i, (by, bx) in enumerate(boundary_pixels):
-                    nearest_py, nearest_px = partition_pixels[indices[i]]
-                    partition_map[by, bx] = partition_map[nearest_py, nearest_px]
+                # Dilate by 1 pixel
+                dilated = binary_dilation(partition_pixels, iterations=1)
+
+                # Only extend into unassigned pixels (not barriers, not other partitions)
+                new_pixels = dilated & (partition_map == -1)
+
+                # Assign new pixels to this partition
+                partition_map[new_pixels] = partition_id
 
     return partition_map
 
@@ -774,6 +774,34 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
 
     if merged_count > 0:
         print(f'After merging {merged_count} segments with identical colors: {len(segment_info)} segments')
+
+    # Merge small segments into largest segment in same partition
+    # Small segments are often artifacts and can't reliably sample boundary colors
+    merged_count = 0
+    for partition_id in range(num_partitions):
+        partition_segments = [s for s in segment_info if s.get('partition') == partition_id]
+
+        # Find largest segment in this partition
+        if len(partition_segments) > 1:
+            largest_seg = max(partition_segments, key=lambda s: s['size'])
+
+            # Merge small segments (< 30px) into largest
+            for seg in partition_segments:
+                if seg['size'] < 30 and seg != largest_seg and seg in segment_info:
+                    # Merge into largest
+                    largest_seg['mask'] = largest_seg['mask'] | seg['mask']
+                    largest_seg['size'] += seg['size']
+                    segments[seg['mask']] = largest_seg['id']
+                    segment_info.remove(seg)
+                    merged_count += 1
+                    print(f'  Merged small segment {seg["id"]} ({seg["size"]}px) into largest segment {largest_seg["id"]} in partition {partition_id}')
+
+            # Recalculate centroid
+            if merged_count > 0:
+                largest_seg['centroid'] = np.mean(np.argwhere(largest_seg['mask']), axis=0)
+
+    if merged_count > 0:
+        print(f'After merging small segments into largest per partition: {len(segment_info)} segments')
 
     # Merge similar adjacent segments WITHIN each partition
     if color_std is not None:

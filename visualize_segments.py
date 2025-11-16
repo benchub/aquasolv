@@ -42,6 +42,7 @@ seg_result = find_segments(corner, template)
 segments = seg_result['segments']
 segment_info = seg_result['segment_info']
 core_mask = seg_result['core_mask']
+partition_map = seg_result.get('partition_map', None)
 
 # Define distinct colors for visualization
 seg_colors = [
@@ -103,11 +104,17 @@ segment_fill_info = {}
 for info in segment_info:
     seg_id = info['id']
     seg_mask = info['mask']
+    seg_partition = info.get('partition')
 
     # Check if segment touches boundary
     # Dilate more to reach further boundary pixels for better sampling
     seg_dilated = binary_dilation(seg_mask, iterations=3)
     boundary_contact = seg_dilated & watermark_boundary
+
+    # Filter boundary contact by partition to prevent cross-partition sampling
+    if partition_map is not None and seg_partition is not None:
+        same_partition_mask = (partition_map == seg_partition)
+        boundary_contact = boundary_contact & same_partition_mask
 
     if np.sum(boundary_contact) > 0:
         # Segment touches boundary - sample from boundary
@@ -146,6 +153,12 @@ for info in segment_info:
         for dil in range(1, 10):
             seg_dilated = binary_dilation(seg_mask, iterations=dil)
             boundary_contact = seg_dilated & watermark_boundary
+
+            # Filter boundary contact by partition to prevent cross-partition sampling
+            if partition_map is not None and seg_partition is not None:
+                same_partition_mask = (partition_map == seg_partition)
+                boundary_contact = boundary_contact & same_partition_mask
+
             if np.sum(boundary_contact) > 0:
                 boundary_coords = np.argwhere(boundary_contact)
                 boundary_colors = corner[boundary_contact]
