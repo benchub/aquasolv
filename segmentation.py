@@ -237,25 +237,10 @@ def detect_geometric_features(corner, watermark_mask):
 
         # Build final trimmed lines
         trimmed_lines = []
-        barrier_lines = []  # Extended to span watermark for partition creation
         for i in range(len(extended_lines)):
             source = line_endpoints[i]['source']
             target = line_endpoints[i]['target']
             trimmed_lines.append((source, target))
-
-            # Create barrier line: extend trimmed line to span watermark bounds
-            # Determine if line is more horizontal or vertical
-            dx = abs(target[0] - source[0])
-            dy = abs(target[1] - source[1])
-
-            if dx > dy:  # More horizontal
-                # Extend horizontally across watermark width (0 to 99)
-                y_val = (source[1] + target[1]) / 2
-                barrier_lines.append(((0, y_val), (99, y_val)))
-            else:  # More vertical
-                # Extend vertically across watermark height (0 to 99)
-                x_val = (source[0] + target[0]) / 2
-                barrier_lines.append(((x_val, 0), (x_val, 99)))
 
         # Detect curves in background using contours
         detected_curves = []
@@ -553,10 +538,8 @@ def detect_geometric_features(corner, watermark_mask):
             detected_curves = [c for c in detected_curves if len(c['points']) > 0]
 
         # Return both lines and curves
-        # Include both barrier_lines (for partition barriers) and trimmed_lines (for visualization)
         result = {
             'lines': trimmed_lines if trimmed_lines else [],
-            'extended_lines': barrier_lines if barrier_lines else [],  # Barrier lines for partitioning
             'curves': detected_curves
         }
         return result if (trimmed_lines or detected_curves) else None
@@ -596,7 +579,7 @@ def create_partitions(watermark_mask, lines, curves):
     # Add line barriers
     for line in lines:
         (x1, y1), (x2, y2) = line
-        # Draw thick line (2 pixels wide) to ensure proper separation
+        # Draw thick line to ensure proper separation
         num_points = int(np.sqrt((x2-x1)**2 + (y2-y1)**2) * 2)
         if num_points < 2:
             continue
@@ -606,9 +589,9 @@ def create_partitions(watermark_mask, lines, curves):
             ix, iy = int(round(x)), int(round(y))
             if 0 <= ix < w and 0 <= iy < h:
                 barrier_map[iy, ix] = True
-                # Make it 2-pixels thick for better separation
-                for di in [-1, 0, 1]:
-                    for dj in [-1, 0, 1]:
+                # Make it 2-pixels thick for good separation
+                for di in range(-1, 2):
+                    for dj in range(-1, 2):
                         ni, nj = iy + di, ix + dj
                         if 0 <= ni < h and 0 <= nj < w:
                             barrier_map[ni, nj] = True
@@ -720,30 +703,25 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
 
     detected_lines = []
     detected_curves = []
-    extended_lines_for_barriers = []
     if geometry_result:
-        detected_lines = geometry_result.get('lines', [])  # Trimmed lines for visualization
-        extended_lines_for_barriers = geometry_result.get('extended_lines', [])  # Full lines for barriers
+        detected_lines = geometry_result.get('lines', [])
         detected_curves = geometry_result.get('curves', [])
         total_features = len(detected_lines) + len(detected_curves)
         print(f'Detected {len(detected_lines)} lines and {len(detected_curves)} curves ({total_features} total boundaries)')
 
     # Filter to only use "full lines" (long lines that span across the image)
-    # Use extended lines for partition barriers (they create complete divisions)
-    full_lines_for_barriers = []
-    for line in extended_lines_for_barriers:
+    full_lines = []
+    for line in detected_lines:
         (x1, y1), (x2, y2) = line
         length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
         if length >= 60:
-            full_lines_for_barriers.append(line)
+            full_lines.append(line)
 
-    if full_lines_for_barriers or detected_curves:
-        print(f'  Using {len(full_lines_for_barriers)} full lines and {len(detected_curves)} curves for partitioning')
+    if full_lines or detected_curves:
+        print(f'  Using {len(full_lines)} full lines and {len(detected_curves)} curves for partitioning')
 
-    # CREATE PARTITIONS - this is the key step
-    # Use full watermark_mask to include edge pixels in partitions
-    # Use extended lines (not trimmed) to create complete barriers
-    partition_map = create_partitions(watermark_mask, full_lines_for_barriers, detected_curves)
+    # CREATE PARTITIONS - use thicker barriers to ensure proper separation
+    partition_map = create_partitions(watermark_mask, full_lines, detected_curves)
     num_partitions = np.max(partition_map) + 1 if np.any(partition_map >= 0) else 0
 
     print(f'Created {num_partitions} partitions based on geometric features')
