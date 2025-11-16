@@ -1976,6 +1976,152 @@ def remove_watermark_core(img_array, threshold=None, enable_multi_algorithm=True
     return cleaned, quality, mask
 
 
+def remove_color_islands(img_array, mask, max_island_size=20, min_dominance=0.7):
+    """
+    Remove small color blobs in the watermark region by replacing them with dominant surrounding color.
+    A blob is a small connected component (4-connectivity) where most neighbors are a different color.
+
+    Args:
+        img_array: The image array (H, W, 3 or 4)
+        mask: Boolean mask indicating watermark region
+        max_island_size: Maximum size (in pixels) of blobs to consider fixing
+        min_dominance: Minimum fraction of surrounding pixels that must be the same color (0.0-1.0)
+
+    Returns:
+        Cleaned image array
+    """
+    result = img_array.copy()
+    h, w = mask.shape[:2]
+    visited = np.zeros((h, w), dtype=bool)
+
+    # 4-connectivity offsets (no diagonals)
+    neighbors_4 = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+
+    def get_color_tuple(y, x):
+        """Get color as tuple for comparison"""
+        return tuple(result[y, x])
+
+    def flood_fill_island(start_y, start_x):
+        """Find all pixels in the connected component starting from (start_y, start_x)"""
+        island_color = get_color_tuple(start_y, start_x)
+        island_pixels = []
+        stack = [(start_y, start_x)]
+
+        while stack:
+            y, x = stack.pop()
+
+            if y < 0 or y >= h or x < 0 or x >= w:
+                continue
+            if visited[y, x]:
+                continue
+            if not mask[y, x]:  # Only process pixels in watermark region
+                continue
+            if get_color_tuple(y, x) != island_color:
+                continue
+
+            visited[y, x] = True
+            island_pixels.append((y, x))
+
+            # Add 4-connected neighbors
+            for dy, dx in neighbors_4:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx]:
+                    stack.append((ny, nx))
+
+        return island_pixels
+
+    def get_dominant_surrounding_color(island_pixels):
+        """
+        Get the dominant color surrounding the blob.
+        Returns the color if one color dominates (>= min_dominance), otherwise None.
+        """
+        from collections import Counter
+        surrounding_colors = []
+
+        for y, x in island_pixels:
+            # Check all 4 neighbors
+            for dy, dx in neighbors_4:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w:
+                    neighbor_color = get_color_tuple(ny, nx)
+                    # Only count neighbors that are not part of the island
+                    if neighbor_color != get_color_tuple(y, x):
+                        surrounding_colors.append(neighbor_color)
+
+        if not surrounding_colors:
+            return None
+
+        # Find the most common surrounding color
+        color_counts = Counter(surrounding_colors)
+        most_common_color, count = color_counts.most_common(1)[0]
+
+        # Check if it's dominant enough
+        if count / len(surrounding_colors) >= min_dominance:
+            return most_common_color
+        return None
+
+    # Process all pixels in watermark region
+    blobs_fixed = 0
+    pixels_fixed = 0
+    for y in range(h):
+        for x in range(w):
+            if mask[y, x] and not visited[y, x]:
+                # Found an unvisited pixel in watermark region
+                island_pixels = flood_fill_island(y, x)
+
+                if 0 < len(island_pixels) <= max_island_size:
+                    # This is a small blob - check if it has a dominant surrounding color
+                    surrounding_color = get_dominant_surrounding_color(island_pixels)
+
+                    if surrounding_color is not None:
+                        # Replace all blob pixels with dominant surrounding color
+                        for iy, ix in island_pixels:
+                            result[iy, ix] = surrounding_color
+                        blobs_fixed += 1
+                        pixels_fixed += len(island_pixels)
+
+    if blobs_fixed > 0:
+        print(f"Fixed {blobs_fixed} color blob(s) ({pixels_fixed} pixels) in watermark region")
+
+    # Second pass: fix isolated colored pixels that are mostly surrounded by white
+    # These are artifacts that appear in what should be white regions
+    additional_fixed = 0
+
+    for y in range(h):
+        for x in range(w):
+            if not mask[y, x]:
+                continue
+
+            pixel_color = get_color_tuple(y, x)
+
+            # Check if this pixel is white or close to white (likely already correct)
+            r, g, b = pixel_color
+            if r > 250 and g > 250 and b > 250:
+                continue
+
+            # Count white neighbors (4-connected)
+            white_neighbors = 0
+            white_neighbor_color = None
+            for dy, dx in neighbors_4:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and mask[ny, nx]:
+                    neighbor_color = get_color_tuple(ny, nx)
+                    nr, ng, nb = neighbor_color
+                    if nr > 250 and ng > 250 and nb > 250:
+                        white_neighbors += 1
+                        white_neighbor_color = neighbor_color
+
+            # If 2 or more neighbors are white (50%+), this is likely a stray pixel - fix it
+            if white_neighbors >= 2 and white_neighbor_color is not None:
+                result[y, x] = white_neighbor_color
+                additional_fixed += 1
+
+    if additional_fixed > 0:
+        print(f"Fixed {additional_fixed} additional pixel(s) with white-dominant neighborhoods")
+
+    return result
+
+
 def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_thresholds=True):
     """
     Remove the Gemini watermark from an image by inpainting from surrounding pixels.
@@ -2059,6 +2205,15 @@ def remove_watermark(input_path, output_path=None, threshold=None, try_multiple_
 
         if quality is not None:
             print(f"Quality: overall={quality['overall']:.1f}, smooth={quality['smoothness']:.1f}, consistent={quality['consistency']:.1f}, edges={quality['edge_preservation']:.1f}")
+
+    # Post-process: remove color islands in watermark region
+    # Expand the mask to cover a larger area (the entire bottom-right corner)
+    # to catch artifacts that appear outside the detected watermark
+    print("\nPost-processing: removing color islands...")
+    h, w = mask.shape[:2]
+    expanded_mask = np.zeros_like(mask)
+    expanded_mask[h-74:, w-74:] = True  # Cover the typical watermark corner region
+    cleaned = remove_color_islands(cleaned, expanded_mask)
 
     # Save result with error handling
     if output_path is None:
