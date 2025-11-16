@@ -574,8 +574,10 @@ def create_partitions(watermark_mask, lines, curves):
         partition_map[watermark_mask] = 0
         return partition_map
 
-    # Use "which side of line" approach for lines
-    if lines and not curves:
+    # IMPORTANT: Use barrier-based connected components for all cases
+    # The "which side of line" approach was using infinite lines, which incorrectly
+    # separated regions that are connected around truncated line endpoints
+    if False:  # Disabled "which side of line" approach
         partition_map = np.full((h, w), -1, dtype=int)
 
         # For each watermark pixel, compute a signature based on which side of each line it's on
