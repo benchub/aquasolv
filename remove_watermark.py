@@ -605,15 +605,38 @@ def segmented_inpaint_watermark(img_array, template_mask):
         segment_all_coords = np.array(segment_all_coords)
         segment_all_ids = np.array(segment_all_ids)
 
-        # Assign edge pixels using simple nearest neighbor
-        # Partitions already ensure segments don't cross geometric boundaries,
-        # so no need for curve-aware filtering here
+        # Assign edge pixels respecting partition boundaries
         edge_coords = np.argwhere(edge_mask)
         for ey, ex in edge_coords:
-            # Find the nearest segment
-            distances_to_core = np.sqrt(np.sum((segment_all_coords - np.array([ey, ex]))**2, axis=1))
-            nearest_idx = np.argmin(distances_to_core)
-            closest_segment_id = segment_all_ids[nearest_idx]
+            # Get partition ID for this edge pixel
+            edge_partition = partition_map[ey, ex] if partition_map is not None else None
+
+            if edge_partition is not None and edge_partition >= 0:
+                # Filter to only segments in the same partition
+                valid_indices = []
+                for idx, seg_id in enumerate(segment_all_ids):
+                    # Find partition for this segment
+                    for info in segment_info:
+                        if info['id'] == seg_id:
+                            if info.get('partition') == edge_partition:
+                                valid_indices.append(idx)
+                            break
+
+                if len(valid_indices) > 0:
+                    # Find nearest segment within this partition
+                    distances = np.sqrt(np.sum((segment_all_coords[valid_indices] - np.array([ey, ex]))**2, axis=1))
+                    nearest_valid_idx = valid_indices[np.argmin(distances)]
+                    closest_segment_id = segment_all_ids[nearest_valid_idx]
+                else:
+                    # Fallback: no segments in this partition (shouldn't happen)
+                    distances_to_core = np.sqrt(np.sum((segment_all_coords - np.array([ey, ex]))**2, axis=1))
+                    nearest_idx = np.argmin(distances_to_core)
+                    closest_segment_id = segment_all_ids[nearest_idx]
+            else:
+                # No partition info, use simple nearest neighbor
+                distances_to_core = np.sqrt(np.sum((segment_all_coords - np.array([ey, ex]))**2, axis=1))
+                nearest_idx = np.argmin(distances_to_core)
+                closest_segment_id = segment_all_ids[nearest_idx]
 
             # Use that segment's fill color
             fill_color = segment_fill_colors[closest_segment_id]

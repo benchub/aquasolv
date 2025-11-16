@@ -676,7 +676,8 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         print(f'  Using {len(full_lines)} full lines and {len(detected_curves)} curves for partitioning')
 
     # CREATE PARTITIONS - this is the key step
-    partition_map = create_partitions(core_mask, full_lines, detected_curves)
+    # Use full watermark_mask to include edge pixels in partitions
+    partition_map = create_partitions(watermark_mask, full_lines, detected_curves)
     num_partitions = np.max(partition_map) + 1 if np.any(partition_map >= 0) else 0
 
     print(f'Created {num_partitions} partitions based on geometric features')
