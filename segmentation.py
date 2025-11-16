@@ -555,6 +555,7 @@ def detect_geometric_features(corner, watermark_mask):
 def create_partitions(watermark_mask, lines, curves):
     """
     Partition the watermark region using geometric features as hard boundaries.
+    Uses "which side of line" approach instead of barrier-based connected components.
 
     Args:
         watermark_mask: Boolean mask of watermark pixels
@@ -571,6 +572,89 @@ def create_partitions(watermark_mask, lines, curves):
     if not lines and not curves:
         partition_map = np.full((h, w), -1, dtype=int)
         partition_map[watermark_mask] = 0
+        return partition_map
+
+    # Use "which side of line" approach for lines
+    if lines and not curves:
+        partition_map = np.full((h, w), -1, dtype=int)
+
+        # For each watermark pixel, compute a signature based on which side of each line it's on
+        # Ignore pixels that are very close to lines (within barrier distance)
+        watermark_pixels = np.argwhere(watermark_mask)
+        pixel_signatures = []
+        barrier_distance = 3  # pixels
+
+        for py, px in watermark_pixels:
+            signature = []
+            is_near_barrier = False
+
+            for line_idx, line in enumerate(lines):
+                (x1, y1), (x2, y2) = line
+                # Compute signed distance to line (which side)
+                # Line direction vector: (x2-x1, y2-y1)
+                # Point to line vector: (px-x1, py-y1)
+                # Cross product gives signed distance
+                cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+
+                # Normalize by line length to get actual distance
+                line_length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+                if line_length > 0:
+                    distance = abs(cross) / line_length
+                    if distance < barrier_distance:
+                        is_near_barrier = True
+
+                signature.append(1 if cross > 0 else -1 if cross < 0 else 0)
+
+            # Mark barrier pixels with special signature
+            if is_near_barrier:
+                pixel_signatures.append(None)
+            else:
+                pixel_signatures.append(tuple(signature))
+
+        # Group pixels by signature (excluding barrier pixels with None signature)
+        unique_signatures = {}
+        barrier_pixel_indices = []
+        for idx, sig in enumerate(pixel_signatures):
+            if sig is None:
+                barrier_pixel_indices.append(idx)
+            else:
+                if sig not in unique_signatures:
+                    unique_signatures[sig] = []
+                unique_signatures[sig].append(idx)
+
+        # Assign partition IDs to non-barrier pixels
+        for partition_id, indices in enumerate(unique_signatures.values()):
+            for idx in indices:
+                py, px = watermark_pixels[idx]
+                partition_map[py, px] = partition_id
+
+        # Assign barrier pixels to nearest partition
+        if barrier_pixel_indices and unique_signatures:
+            from scipy.spatial import cKDTree
+            non_barrier_pixels = []
+            for indices in unique_signatures.values():
+                for idx in indices:
+                    non_barrier_pixels.append(watermark_pixels[idx])
+            non_barrier_pixels = np.array(non_barrier_pixels)
+
+            if len(non_barrier_pixels) > 0:
+                tree = cKDTree(non_barrier_pixels)
+                for idx in barrier_pixel_indices:
+                    by, bx = watermark_pixels[idx]
+                    _, nearest_idx = tree.query([by, bx])
+                    nearest_y, nearest_x = non_barrier_pixels[nearest_idx]
+                    partition_map[by, bx] = partition_map[nearest_y, nearest_x]
+
+        # Extend partitions into boundary region using propagation
+        num_partitions = len(unique_signatures)
+        if num_partitions > 0:
+            for iteration in range(6):
+                for partition_id in range(num_partitions):
+                    partition_pixels = (partition_map == partition_id)
+                    dilated = binary_dilation(partition_pixels, iterations=1)
+                    new_pixels = dilated & (partition_map == -1)
+                    partition_map[new_pixels] = partition_id
+
         return partition_map
 
     # Create a barrier map: mark pixels ON or very close to lines/curves as barriers
@@ -709,19 +793,13 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
         total_features = len(detected_lines) + len(detected_curves)
         print(f'Detected {len(detected_lines)} lines and {len(detected_curves)} curves ({total_features} total boundaries)')
 
-    # Filter to only use "full lines" (long lines that span across the image)
-    full_lines = []
-    for line in detected_lines:
-        (x1, y1), (x2, y2) = line
-        length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-        if length >= 60:
-            full_lines.append(line)
+    # For "which side of line" partitioning, use all detected lines (even short ones)
+    # Short lines after trimming still define valid partition boundaries
+    if detected_lines or detected_curves:
+        print(f'  Using {len(detected_lines)} lines and {len(detected_curves)} curves for partitioning')
 
-    if full_lines or detected_curves:
-        print(f'  Using {len(full_lines)} full lines and {len(detected_curves)} curves for partitioning')
-
-    # CREATE PARTITIONS - use thicker barriers to ensure proper separation
-    partition_map = create_partitions(watermark_mask, full_lines, detected_curves)
+    # CREATE PARTITIONS - use "which side of line" approach for trimmed lines
+    partition_map = create_partitions(watermark_mask, detected_lines, detected_curves)
     num_partitions = np.max(partition_map) + 1 if np.any(partition_map >= 0) else 0
 
     print(f'Created {num_partitions} partitions based on geometric features')
