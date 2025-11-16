@@ -453,10 +453,10 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
                 # If partitions exist, only sample from boundary pixels in the same partition
                 if partition_map is not None and segment_partition is not None:
-                    # Create a mask for the partition-extended region (partition pixels + adjacent boundary)
-                    partition_mask = (partition_map == segment_partition)
-                    partition_extended = binary_dilation(partition_mask, iterations=2)
-                    contact_points = contact_points & partition_extended
+                    # Filter to only pixels in the same partition
+                    # partition_map now extends into boundary region, so this works directly
+                    same_partition_mask = (partition_map == segment_partition)
+                    contact_points = contact_points & same_partition_mask
 
                 if np.any(contact_points):
                     # These are the points just outside watermark where segment reaches
@@ -511,10 +511,10 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
             # If partitions exist, only sample from boundary pixels in the same partition
             if partition_map is not None and segment_partition is not None:
-                # Create a mask for the partition-extended region (partition pixels + adjacent boundary)
-                partition_mask = (partition_map == segment_partition)
-                partition_extended = binary_dilation(partition_mask, iterations=2)
-                boundary_contact = boundary_contact & partition_extended
+                # Filter to only pixels in the same partition
+                # partition_map now extends into boundary region, so this works directly
+                same_partition_mask = (partition_map == segment_partition)
+                boundary_contact = boundary_contact & same_partition_mask
 
             # Sample ALL reachable boundary pixels for accurate color representation
             boundary_coords = np.argwhere(boundary_contact)

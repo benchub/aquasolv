@@ -606,6 +606,24 @@ def create_partitions(watermark_mask, lines, curves):
                 nearest_py, nearest_px = partition_pixels[indices[i]]
                 partition_map[by, bx] = partition_map[nearest_py, nearest_px]
 
+    # IMPORTANT: Extend partitions into boundary region (background pixels near watermark)
+    # This ensures boundary color sampling respects partition boundaries
+    if num_partitions > 0:
+        # Dilate watermark to get boundary region (where we sample colors from)
+        dilated_watermark = binary_dilation(watermark_mask, iterations=6)
+        boundary_region = dilated_watermark & ~watermark_mask
+        boundary_pixels = np.argwhere(boundary_region)
+
+        if len(boundary_pixels) > 0:
+            # Assign each boundary pixel to nearest partition
+            partition_pixels = np.argwhere(partition_map >= 0)
+            if len(partition_pixels) > 0:
+                tree = cKDTree(partition_pixels)
+                distances, indices = tree.query(boundary_pixels)
+                for i, (by, bx) in enumerate(boundary_pixels):
+                    nearest_py, nearest_px = partition_pixels[indices[i]]
+                    partition_map[by, bx] = partition_map[nearest_py, nearest_px]
+
     return partition_map
 
 
