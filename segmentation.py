@@ -107,21 +107,24 @@ def detect_geometric_features(corner, watermark_mask):
                 return (ix, iy)
             return None
 
-        # Collect intersections for each line
+        # Collect intersections for each line (in or near watermark)
+        # Dilate watermark slightly to catch intersections just outside
+        dilated_watermark = binary_dilation(watermark_mask, iterations=3)
+
         line_intersections = [[] for _ in range(len(extended_lines))]
         for i in range(len(extended_lines)):
             for j in range(i + 1, len(extended_lines)):
                 intersection = line_intersection(extended_lines[i], extended_lines[j])
                 if intersection:
                     ix, iy = intersection
-                    # Check if intersection is within image bounds
+                    # Check if intersection is in/near watermark
                     if 0 <= int(ix) < 100 and 0 <= int(iy) < 100:
-                        if watermark_mask[int(iy), int(ix)]:
+                        if dilated_watermark[int(iy), int(ix)]:
                             line_intersections[i].append((ix, iy, j))
                             line_intersections[j].append((ix, iy, i))
 
-        # Trim lines at intersections using mutual corner detection
-        # Store temporary line endpoints for iterative refinement
+        # Trim lines at intersections ITERATIVELY - cascading truncation
+        # Initialize line endpoints
         line_endpoints = {}
         for i, line1 in enumerate(extended_lines):
             (x1, y1), (x2, y2) = line1
@@ -136,84 +139,106 @@ def detect_geometric_features(corner, watermark_mask):
             source_end = (x1, y1) if dist_x1_to_detected < dist_x2_to_detected else (x2, y2)
             other_end = (x2, y2) if dist_x1_to_detected < dist_x2_to_detected else (x1, y1)
 
-            line_endpoints[i] = {'source': source_end, 'target': other_end, 'intersections': line_intersections[i]}
+            line_endpoints[i] = {'source': source_end, 'target': other_end}
 
-        # Find valid corners (where both lines stop) - mutual corners
-        trimmed_lines = []
-        for i in range(len(extended_lines)):
-            source_end = line_endpoints[i]['source']
+        # Iteratively trim lines at mutual corners until no more changes
+        max_iterations = 10
+        for iteration in range(max_iterations):
+            changed = False
 
-            # Calculate direction
-            dir_x = line_endpoints[i]['target'][0] - source_end[0]
-            dir_y = line_endpoints[i]['target'][1] - source_end[1]
-            dir_len = np.sqrt(dir_x**2 + dir_y**2)
-            if dir_len > 0:
+            # Recompute valid intersections based on current line endpoints
+            current_intersections = {i: [] for i in range(len(extended_lines))}
+            for i in range(len(extended_lines)):
+                for j in range(i + 1, len(extended_lines)):
+                    line_i = (line_endpoints[i]['source'], line_endpoints[i]['target'])
+                    line_j = (line_endpoints[j]['source'], line_endpoints[j]['target'])
+
+                    intersection = line_intersection(line_i, line_j)
+                    if intersection:
+                        ix, iy = intersection
+                        if (0 <= int(iy) < 100 and 0 <= int(ix) < 100 and dilated_watermark[int(iy), int(ix)]):
+                            # Check if intersection is on both segments
+                            si, ti = line_endpoints[i]['source'], line_endpoints[i]['target']
+                            sj, tj = line_endpoints[j]['source'], line_endpoints[j]['target']
+
+                            on_i = False
+                            if abs(ti[0] - si[0]) > abs(ti[1] - si[1]):
+                                if min(si[0], ti[0]) - 0.1 <= ix <= max(si[0], ti[0]) + 0.1:
+                                    on_i = True
+                            else:
+                                if min(si[1], ti[1]) - 0.1 <= iy <= max(si[1], ti[1]) + 0.1:
+                                    on_i = True
+
+                            on_j = False
+                            if abs(tj[0] - sj[0]) > abs(tj[1] - sj[1]):
+                                if min(sj[0], tj[0]) - 0.1 <= ix <= max(sj[0], tj[0]) + 0.1:
+                                    on_j = True
+                            else:
+                                if min(sj[1], tj[1]) - 0.1 <= iy <= max(sj[1], tj[1]) + 0.1:
+                                    on_j = True
+
+                            if on_i and on_j:
+                                current_intersections[i].append((ix, iy, j))
+                                current_intersections[j].append((ix, iy, i))
+
+            # For each line, find nearest mutual corner and truncate
+            for i in range(len(extended_lines)):
+                source_end = line_endpoints[i]['source']
+                target_end = line_endpoints[i]['target']
+
+                dir_x = target_end[0] - source_end[0]
+                dir_y = target_end[1] - source_end[1]
+                dir_len = np.sqrt(dir_x**2 + dir_y**2)
+                if dir_len == 0:
+                    continue
                 dir_x /= dir_len
                 dir_y /= dir_len
 
-            # Find the farthest intersection where BOTH lines will stop (mutual corner)
-            best_intersection = None
-            max_param_t = -1
+                best_intersection = None
+                min_t = float('inf')
 
-            for ix, iy, j in line_endpoints[i]['intersections']:
-                dx_to_int = ix - source_end[0]
-                dy_to_int = iy - source_end[1]
-                t = dx_to_int * dir_x + dy_to_int * dir_y
+                for ix, iy, j in current_intersections[i]:
+                    dx, dy = ix - source_end[0], iy - source_end[1]
+                    t = dx * dir_x + dy * dir_y
 
-                if t > 0:
-                    # Check if the OTHER line (j) will also reach this point
-                    other_line_reaches = False
-                    for ox, oy, oj in line_endpoints[j]['intersections']:
-                        if abs(ox - ix) < 0.1 and abs(oy - iy) < 0.1 and oj == i:
-                            j_source = line_endpoints[j]['source']
-                            j_dir_x = line_endpoints[j]['target'][0] - j_source[0]
-                            j_dir_y = line_endpoints[j]['target'][1] - j_source[1]
-                            j_dir_len = np.sqrt(j_dir_x**2 + j_dir_y**2)
-                            if j_dir_len > 0:
-                                j_dir_x /= j_dir_len
-                                j_dir_y /= j_dir_len
+                    if t > 0.1:
+                        j_source = line_endpoints[j]['source']
+                        j_target = line_endpoints[j]['target']
+                        j_dir_x = j_target[0] - j_source[0]
+                        j_dir_y = j_target[1] - j_source[1]
+                        j_dir_len = np.sqrt(j_dir_x**2 + j_dir_y**2)
+                        if j_dir_len == 0:
+                            continue
+                        j_dir_x /= j_dir_len
+                        j_dir_y /= j_dir_len
 
-                            j_dx = ix - j_source[0]
-                            j_dy = iy - j_source[1]
-                            j_t = j_dx * j_dir_x + j_dy * j_dir_y
+                        j_dx, j_dy = ix - j_source[0], iy - j_source[1]
+                        j_t = j_dx * j_dir_x + j_dy * j_dir_y
 
-                            # Check if this is the farthest intersection for line j
-                            is_farthest_for_j = True
-                            for ox2, oy2, oj2 in line_endpoints[j]['intersections']:
-                                j_dx2 = ox2 - j_source[0]
-                                j_dy2 = oy2 - j_source[1]
-                                j_t2 = j_dx2 * j_dir_x + j_dy2 * j_dir_y
-                                if j_t2 > j_t + 0.1:
-                                    is_farthest_for_j = False
-                                    break
-
-                            if is_farthest_for_j and j_t > 0:
-                                other_line_reaches = True
+                        is_nearest_for_j = True
+                        for ox, oy, oj in current_intersections[j]:
+                            o_dx, o_dy = ox - j_source[0], oy - j_source[1]
+                            o_t = o_dx * j_dir_x + o_dy * j_dir_y
+                            if 0.1 < o_t < j_t - 0.1:
+                                is_nearest_for_j = False
                                 break
 
-                    # Use the farthest mutual corner
-                    if other_line_reaches and t > max_param_t:
-                        max_param_t = t
-                        best_intersection = (ix, iy)
+                        if is_nearest_for_j and j_t > 0.1 and t < min_t:
+                            min_t = t
+                            best_intersection = (ix, iy)
 
-            if best_intersection:
-                trimmed_lines.append((source_end, best_intersection))
-            else:
-                # No mutual corner, use nearest intersection
-                min_t = float('inf')
-                nearest_int = None
-                for ix, iy, j in line_endpoints[i]['intersections']:
-                    dx_to_int = ix - source_end[0]
-                    dy_to_int = iy - source_end[1]
-                    t = dx_to_int * dir_x + dy_to_int * dir_y
-                    if t > 0 and t < min_t:
-                        min_t = t
-                        nearest_int = (ix, iy)
+                if best_intersection and np.sqrt((best_intersection[0] - target_end[0])**2 +
+                                                (best_intersection[1] - target_end[1])**2) > 0.1:
+                    line_endpoints[i]['target'] = best_intersection
+                    changed = True
 
-                if nearest_int:
-                    trimmed_lines.append((source_end, nearest_int))
-                else:
-                    trimmed_lines.append((source_end, line_endpoints[i]['target']))
+            if not changed:
+                break
+
+        # Build final trimmed lines
+        trimmed_lines = []
+        for i in range(len(extended_lines)):
+            trimmed_lines.append((line_endpoints[i]['source'], line_endpoints[i]['target']))
 
         # Detect curves in background using contours
         detected_curves = []

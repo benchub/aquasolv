@@ -156,25 +156,31 @@ if lines is not None:
                 # Fallback: just use detected segment
                 extended_lines.append(((float(x1), float(y1)), (float(x2), float(y2))))
 
-    # Second pass: find all intersections inside watermark
+    # Second pass: find all intersections in or near watermark
     # Build a map of which intersections affect which lines
     line_intersections = {i: [] for i in range(len(extended_lines))}
+
+    # Dilate watermark slightly to catch intersections just outside
+    dilated_watermark = binary_dilation(watermark_mask, iterations=3)
 
     for i in range(len(extended_lines)):
         for j in range(i + 1, len(extended_lines)):
             intersection = line_intersection(extended_lines[i], extended_lines[j])
             if intersection:
                 ix, iy = intersection
-                # Check if intersection is inside watermark
+                # Check if intersection is in or near watermark (within 100x100 and in dilated region)
                 if (0 <= int(iy) < 100 and 0 <= int(ix) < 100 and
-                    watermark_mask[int(iy), int(ix)]):
+                    dilated_watermark[int(iy), int(ix)]):
                     # Add this intersection to both lines
                     line_intersections[i].append((ix, iy, j))
                     line_intersections[j].append((ix, iy, i))
-                    print(f"  Lines {i} and {j} intersect at ({ix:.1f}, {iy:.1f}) inside watermark")
+                    in_wm = "inside" if watermark_mask[int(iy), int(ix)] else "near"
+                    print(f"  Lines {i} and {j} intersect at ({ix:.1f}, {iy:.1f}) {in_wm} watermark")
 
-    # Third pass: trim lines at intersections
-    # Store temporary line endpoints for iterative refinement
+    # Third pass: trim lines at intersections ITERATIVELY
+    # We need to iterate because truncating one pair of lines can invalidate intersections for other lines
+
+    # Initialize line endpoints
     line_endpoints = {}
     for i, line1 in enumerate(extended_lines):
         (x1, y1), (x2, y2) = line1
@@ -189,91 +195,127 @@ if lines is not None:
         source_end = (x1, y1) if dist_x1_to_detected < dist_x2_to_detected else (x2, y2)
         other_end = (x2, y2) if dist_x1_to_detected < dist_x2_to_detected else (x1, y1)
 
-        line_endpoints[i] = {'source': source_end, 'target': other_end, 'intersections': line_intersections[i]}
+        line_endpoints[i] = {'source': source_end, 'target': other_end}
 
-    # Iteratively find valid corners (where both lines stop)
-    trimmed_lines = []
-    for i in range(len(extended_lines)):
-        source_end = line_endpoints[i]['source']
+    # Iteratively trim lines at mutual corners
+    # Keep iterating until no more lines change
+    max_iterations = 10
+    for iteration in range(max_iterations):
+        changed = False
 
-        # Calculate direction
-        dir_x = line_endpoints[i]['target'][0] - source_end[0]
-        dir_y = line_endpoints[i]['target'][1] - source_end[1]
-        dir_len = np.sqrt(dir_x**2 + dir_y**2)
-        if dir_len > 0:
+        # Recompute valid intersections based on current line endpoints
+        current_intersections = {i: [] for i in range(len(extended_lines))}
+        for i in range(len(extended_lines)):
+            for j in range(i + 1, len(extended_lines)):
+                # Get current line endpoints
+                line_i = (line_endpoints[i]['source'], line_endpoints[i]['target'])
+                line_j = (line_endpoints[j]['source'], line_endpoints[j]['target'])
+
+                # Check if they intersect
+                intersection = line_intersection(line_i, line_j)
+                if intersection:
+                    ix, iy = intersection
+                    # Check if intersection is in/near watermark AND on both line segments
+                    if (0 <= int(iy) < 100 and 0 <= int(ix) < 100 and
+                        dilated_watermark[int(iy), int(ix)]):
+                        # Check if intersection is actually on both segments (not just extended lines)
+                        si = line_endpoints[i]['source']
+                        ti = line_endpoints[i]['target']
+                        sj = line_endpoints[j]['source']
+                        tj = line_endpoints[j]['target']
+
+                        # Check i segment
+                        on_i = False
+                        if abs(ti[0] - si[0]) > abs(ti[1] - si[1]):  # More horizontal
+                            if min(si[0], ti[0]) - 0.1 <= ix <= max(si[0], ti[0]) + 0.1:
+                                on_i = True
+                        else:  # More vertical
+                            if min(si[1], ti[1]) - 0.1 <= iy <= max(si[1], ti[1]) + 0.1:
+                                on_i = True
+
+                        # Check j segment
+                        on_j = False
+                        if abs(tj[0] - sj[0]) > abs(tj[1] - sj[1]):  # More horizontal
+                            if min(sj[0], tj[0]) - 0.1 <= ix <= max(sj[0], tj[0]) + 0.1:
+                                on_j = True
+                        else:  # More vertical
+                            if min(sj[1], tj[1]) - 0.1 <= iy <= max(sj[1], tj[1]) + 0.1:
+                                on_j = True
+
+                        if on_i and on_j:
+                            current_intersections[i].append((ix, iy, j))
+                            current_intersections[j].append((ix, iy, i))
+
+        # For each line, find nearest mutual corner and truncate
+        for i in range(len(extended_lines)):
+            source_end = line_endpoints[i]['source']
+            target_end = line_endpoints[i]['target']
+
+            # Calculate direction
+            dir_x = target_end[0] - source_end[0]
+            dir_y = target_end[1] - source_end[1]
+            dir_len = np.sqrt(dir_x**2 + dir_y**2)
+            if dir_len == 0:
+                continue
             dir_x /= dir_len
             dir_y /= dir_len
 
-        # Find the farthest intersection where BOTH lines will stop (mutual corner)
-        best_intersection = None
-        max_param_t = -1
+            # Find nearest intersection that's mutual (both lines will stop there)
+            best_intersection = None
+            min_t = float('inf')
 
-        for ix, iy, j in line_endpoints[i]['intersections']:
-            # Calculate how far along our direction this intersection is
-            dx_to_int = ix - source_end[0]
-            dy_to_int = iy - source_end[1]
-            t = dx_to_int * dir_x + dy_to_int * dir_y
+            for ix, iy, j in current_intersections[i]:
+                # Calculate distance along our direction
+                dx = ix - source_end[0]
+                dy = iy - source_end[1]
+                t = dx * dir_x + dy * dir_y
 
-            if t > 0:
-                # Check if the OTHER line (j) also has this as an intersection
-                # and whether line j will actually reach this point
-                other_line_reaches = False
-                for ox, oy, oj in line_endpoints[j]['intersections']:
-                    if abs(ox - ix) < 0.1 and abs(oy - iy) < 0.1 and oj == i:
-                        # Line j also lists this intersection with us
-                        # Check if line j will reach this point (it's the farthest for j)
-                        j_source = line_endpoints[j]['source']
-                        j_dir_x = line_endpoints[j]['target'][0] - j_source[0]
-                        j_dir_y = line_endpoints[j]['target'][1] - j_source[1]
-                        j_dir_len = np.sqrt(j_dir_x**2 + j_dir_y**2)
-                        if j_dir_len > 0:
-                            j_dir_x /= j_dir_len
-                            j_dir_y /= j_dir_len
+                if t > 0.1:  # Forward direction, not at source
+                    # Check if this is also the nearest for line j
+                    j_source = line_endpoints[j]['source']
+                    j_target = line_endpoints[j]['target']
+                    j_dir_x = j_target[0] - j_source[0]
+                    j_dir_y = j_target[1] - j_source[1]
+                    j_dir_len = np.sqrt(j_dir_x**2 + j_dir_y**2)
+                    if j_dir_len == 0:
+                        continue
+                    j_dir_x /= j_dir_len
+                    j_dir_y /= j_dir_len
 
-                        j_dx = ix - j_source[0]
-                        j_dy = iy - j_source[1]
-                        j_t = j_dx * j_dir_x + j_dy * j_dir_y
+                    j_dx = ix - j_source[0]
+                    j_dy = iy - j_source[1]
+                    j_t = j_dx * j_dir_x + j_dy * j_dir_y
 
-                        # Check if this is the farthest intersection for line j as well
-                        is_farthest_for_j = True
-                        for ox2, oy2, oj2 in line_endpoints[j]['intersections']:
-                            j_dx2 = ox2 - j_source[0]
-                            j_dy2 = oy2 - j_source[1]
-                            j_t2 = j_dx2 * j_dir_x + j_dy2 * j_dir_y
-                            if j_t2 > j_t + 0.1:  # There's a farther intersection for j
-                                is_farthest_for_j = False
-                                break
-
-                        if is_farthest_for_j and j_t > 0:
-                            other_line_reaches = True
+                    # Check if this is nearest for j
+                    is_nearest_for_j = True
+                    for ox, oy, oj in current_intersections[j]:
+                        o_dx = ox - j_source[0]
+                        o_dy = oy - j_source[1]
+                        o_t = o_dx * j_dir_x + o_dy * j_dir_y
+                        if 0.1 < o_t < j_t - 0.1:
+                            is_nearest_for_j = False
                             break
 
-                # Use the farthest mutual corner
-                if other_line_reaches and t > max_param_t:
-                    max_param_t = t
-                    best_intersection = (ix, iy)
+                    if is_nearest_for_j and j_t > 0.1 and t < min_t:
+                        min_t = t
+                        best_intersection = (ix, iy)
 
-        if best_intersection:
-            print(f"  Line {i}: {source_end} -> {best_intersection} (mutual corner)")
-            trimmed_lines.append((source_end, best_intersection))
-        else:
-            # No mutual corner found, use nearest intersection
-            min_t = float('inf')
-            nearest_int = None
-            for ix, iy, j in line_endpoints[i]['intersections']:
-                dx_to_int = ix - source_end[0]
-                dy_to_int = iy - source_end[1]
-                t = dx_to_int * dir_x + dy_to_int * dir_y
-                if t > 0 and t < min_t:
-                    min_t = t
-                    nearest_int = (ix, iy)
+            # Truncate at mutual corner if found
+            if best_intersection and np.sqrt((best_intersection[0] - target_end[0])**2 +
+                                            (best_intersection[1] - target_end[1])**2) > 0.1:
+                line_endpoints[i]['target'] = best_intersection
+                changed = True
 
-            if nearest_int:
-                print(f"  Line {i}: {source_end} -> {nearest_int} (nearest intersection)")
-                trimmed_lines.append((source_end, nearest_int))
-            else:
-                print(f"  Line {i}: keeping full line")
-                trimmed_lines.append((source_end, line_endpoints[i]['target']))
+        if not changed:
+            break
+
+    # Build final trimmed lines
+    trimmed_lines = []
+    for i in range(len(extended_lines)):
+        source = line_endpoints[i]['source']
+        target = line_endpoints[i]['target']
+        print(f"  Line {i}: {source} -> {target} (mutual corner)")
+        trimmed_lines.append((source, target))
 
     extended_lines = trimmed_lines
 else:
@@ -319,104 +361,218 @@ for contour in contours:
 if detected_curves:
     print(f"  Detected {len(detected_curves)} significant curves (curvature ratio > 1.1)")
 
-    # Extend curves through watermark and find intersections
+    # Function to fit circle to a set of points using algebraic fit
+    def fit_circle_to_points(points):
+        """Fit a circle to a set of 2D points. Returns (cx, cy, radius) or None if fit fails."""
+        if len(points) < 3:
+            return None
+
+        # Use algebraic circle fit: x^2 + y^2 + D*x + E*y + F = 0
+        # Center: (-D/2, -E/2), Radius: sqrt(D^2/4 + E^2/4 - F)
+        x = points[:, 0]
+        y = points[:, 1]
+
+        # Build the design matrix
+        A = np.column_stack([x, y, np.ones(len(points))])
+        b = -(x**2 + y**2)
+
+        try:
+            # Solve least squares
+            coeffs, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+            D, E, F = coeffs
+
+            cx = -D / 2
+            cy = -E / 2
+            radius = np.sqrt(D**2/4 + E**2/4 - F)
+
+            return (cx, cy, radius)
+        except:
+            return None
+
+    # Function to trace a circular arc from one point to another
+    def trace_circular_arc(center, radius, start_point, end_point, num_points=50):
+        """Trace a circular arc from start_point to end_point along a circle."""
+        cx, cy = center
+
+        # Get angles for start and end points
+        start_angle = np.arctan2(start_point[1] - cy, start_point[0] - cx)
+        end_angle = np.arctan2(end_point[1] - cy, end_point[0] - cx)
+
+        # Calculate angular difference (take shortest path)
+        angle_diff = end_angle - start_angle
+        if angle_diff > np.pi:
+            angle_diff -= 2 * np.pi
+        elif angle_diff < -np.pi:
+            angle_diff += 2 * np.pi
+
+        # Generate points along the arc
+        angles = np.linspace(start_angle, start_angle + angle_diff, num_points)
+        arc_points = np.column_stack([
+            cx + radius * np.cos(angles),
+            cy + radius * np.sin(angles)
+        ])
+
+        return arc_points
+
+    # Extend curves through watermark using circle fitting
     if len(detected_curves) >= 2:
         try:
-            # First, extrapolate each curve's endpoints into the watermark
-            for idx, curve in enumerate(detected_curves):
-                points = curve['points']
 
-                # Extrapolate from start
-                if len(points) >= 3:
-                    # Use last 3 points to estimate direction
-                    p0, p1, p2 = points[0], points[1], points[2]
-                    # Direction vector (approximate tangent at start)
-                    dx = p0[0] - p1[0]
-                    dy = p0[1] - p1[1]
-                    length = np.sqrt(dx*dx + dy*dy)
-                    if length > 0:
-                        dx /= length
-                        dy /= length
-                        # Extend 50 pixels in this direction
-                        new_point = p0 + np.array([dx * 50, dy * 50])
-                        # Only add if it goes into the watermark
-                        if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
-                            if watermark_mask[int(new_point[1]), int(new_point[0])]:
-                                curve['points'] = np.vstack([new_point, points])
-
-                # Extrapolate from end
-                if len(points) >= 3:
-                    p0, p1, p2 = points[-1], points[-2], points[-3]
-                    dx = p0[0] - p1[0]
-                    dy = p0[1] - p1[1]
-                    length = np.sqrt(dx*dx + dy*dy)
-                    if length > 0:
-                        dx /= length
-                        dy /= length
-                        new_point = p0 + np.array([dx * 50, dy * 50])
-                        if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
-                            if watermark_mask[int(new_point[1]), int(new_point[0])]:
-                                curve['points'] = np.vstack([curve['points'], new_point])
-
-            # Now check which curves might connect (endpoints close together inside watermark)
+            # Try to connect curves using circle fitting
             curve_connections = []
             for i in range(len(detected_curves)):
                 for j in range(i + 1, len(detected_curves)):
                     curve_i = detected_curves[i]
                     curve_j = detected_curves[j]
 
-                    # Check all endpoint pairs
-                    endpoints_i = [curve_i['points'][0], curve_i['points'][-1]]
-                    endpoints_j = [curve_j['points'][0], curve_j['points'][-1]]
+                    # Try fitting a circle to both curves combined
+                    combined_points = np.vstack([curve_i['points'], curve_j['points']])
+                    circle_fit = fit_circle_to_points(combined_points)
 
-                    for ei_idx, ei in enumerate(endpoints_i):
-                        for ej_idx, ej in enumerate(endpoints_j):
-                            dist = np.sqrt((ei[0] - ej[0])**2 + (ei[1] - ej[1])**2)
+                    if circle_fit is None:
+                        continue
 
-                            # If endpoints are close and both inside watermark, they might connect
-                            if dist < 35:  # Within 35 pixels (increased from 20)
-                                ix, iy = (ei + ej) / 2
-                                if 0 <= int(ix) < 100 and 0 <= int(iy) < 100:
-                                    if watermark_mask[int(iy), int(ix)]:
-                                        # This is a potential connection point inside the watermark
-                                        curve_connections.append({
-                                            'curves': (i, j),
-                                            'endpoints': (ei_idx, ej_idx),
-                                            'meeting_point': (ix, iy),
-                                            'distance': dist
-                                        })
-                                        print(f"  Curves {i} and {j} meet at ({ix:.1f}, {iy:.1f}) inside watermark (dist={dist:.1f})")
+                    cx, cy, radius = circle_fit
 
-            # Extend curves to their meeting points
+                    # Check if the circle fit is reasonable (not too large or too small)
+                    if radius < 10 or radius > 200:
+                        continue
+
+                    # Check which endpoints are in watermark and could be connected
+                    endpoints_i = [
+                        (curve_i['points'][0], 0),   # (point, index)
+                        (curve_i['points'][-1], -1)
+                    ]
+                    endpoints_j = [
+                        (curve_j['points'][0], 0),
+                        (curve_j['points'][-1], -1)
+                    ]
+
+                    # Find the best endpoint pair to connect
+                    best_connection = None
+                    best_score = float('inf')
+
+                    for ei, ei_idx in endpoints_i:
+                        for ej, ej_idx in endpoints_j:
+                            # Check if both endpoints are near the watermark boundary or inside it
+                            ei_in_wm = False
+                            ej_in_wm = False
+
+                            if 0 <= int(ei[0]) < 100 and 0 <= int(ei[1]) < 100:
+                                # Check if endpoint is in watermark or very close to it
+                                if watermark_mask[int(ei[1]), int(ei[0])]:
+                                    ei_in_wm = True
+                                else:
+                                    # Check 3-pixel neighborhood for watermark
+                                    for dy in range(-3, 4):
+                                        for dx in range(-3, 4):
+                                            ny, nx = int(ei[1]) + dy, int(ei[0]) + dx
+                                            if 0 <= nx < 100 and 0 <= ny < 100:
+                                                if watermark_mask[ny, nx]:
+                                                    ei_in_wm = True
+                                                    break
+                                        if ei_in_wm:
+                                            break
+
+                            if 0 <= int(ej[0]) < 100 and 0 <= int(ej[1]) < 100:
+                                if watermark_mask[int(ej[1]), int(ej[0])]:
+                                    ej_in_wm = True
+                                else:
+                                    for dy in range(-3, 4):
+                                        for dx in range(-3, 4):
+                                            ny, nx = int(ej[1]) + dy, int(ej[0]) + dx
+                                            if 0 <= nx < 100 and 0 <= ny < 100:
+                                                if watermark_mask[ny, nx]:
+                                                    ej_in_wm = True
+                                                    break
+                                        if ej_in_wm:
+                                            break
+
+                            if not (ei_in_wm or ej_in_wm):
+                                continue
+
+                            # Calculate how well these endpoints fit the circle
+                            dist_i = abs(np.sqrt((ei[0] - cx)**2 + (ei[1] - cy)**2) - radius)
+                            dist_j = abs(np.sqrt((ej[0] - cx)**2 + (ej[1] - cy)**2) - radius)
+                            fit_error = dist_i + dist_j
+
+                            # Also consider the angular separation (prefer arcs that make sense)
+                            angle_i = np.arctan2(ei[1] - cy, ei[0] - cx)
+                            angle_j = np.arctan2(ej[1] - cy, ej[0] - cx)
+                            angle_diff = abs(angle_j - angle_i)
+                            if angle_diff > np.pi:
+                                angle_diff = 2 * np.pi - angle_diff
+
+                            # Prefer moderate angular separations (not too small, not too large)
+                            angle_score = abs(angle_diff - np.pi/2)  # Prefer ~90 degree arcs
+
+                            score = fit_error + angle_score * 10
+
+                            if score < best_score:
+                                best_score = score
+                                best_connection = {
+                                    'endpoints': (ei_idx, ej_idx),
+                                    'points': (ei, ej),
+                                    'fit_error': fit_error,
+                                    'angle_diff': angle_diff
+                                }
+
+                    # If we found a good connection, create the arc
+                    if best_connection and best_connection['fit_error'] < 15:
+                        curve_connections.append({
+                            'curves': (i, j),
+                            'circle': (cx, cy, radius),
+                            'endpoints': best_connection['endpoints'],
+                            'endpoint_points': best_connection['points'],
+                            'fit_error': best_connection['fit_error'],
+                            'angle_diff': best_connection['angle_diff']
+                        })
+                        print(f"  Curves {i} and {j} fit same circle: center=({cx:.1f}, {cy:.1f}), radius={radius:.1f}, fit_error={best_connection['fit_error']:.1f}")
+
+            # Merge curves with circular arcs
             if curve_connections:
                 for conn in curve_connections:
                     i, j = conn['curves']
                     ei_idx, ej_idx = conn['endpoints']
-                    meeting = conn['meeting_point']
+                    cx, cy, radius = conn['circle']
+                    ei, ej = conn['endpoint_points']
 
-                    # Extend curve i endpoint to meeting point
-                    if ei_idx == 0:  # Extend from start
-                        detected_curves[i]['points'] = np.vstack([
-                            np.array([meeting]),
-                            detected_curves[i]['points']
-                        ])
-                    else:  # Extend from end
-                        detected_curves[i]['points'] = np.vstack([
-                            detected_curves[i]['points'],
-                            np.array([meeting])
-                        ])
+                    # Trace the circular arc from curve i endpoint to curve j endpoint
+                    arc_points = trace_circular_arc((cx, cy), radius, ei, ej, num_points=50)
 
-                    # Extend curve j endpoint to meeting point
-                    if ej_idx == 0:  # Extend from start
-                        detected_curves[j]['points'] = np.vstack([
-                            np.array([meeting]),
-                            detected_curves[j]['points']
-                        ])
-                    else:  # Extend from end
-                        detected_curves[j]['points'] = np.vstack([
-                            detected_curves[j]['points'],
-                            np.array([meeting])
-                        ])
+                    # Build the merged curve
+                    curve_i_points = detected_curves[i]['points']
+                    curve_j_points = detected_curves[j]['points']
+
+                    # Determine the order: curve_i -> arc -> curve_j
+                    if ei_idx == 0:
+                        # Start of curve i, so reverse it
+                        curve_i_ordered = curve_i_points[::-1]
+                    else:
+                        # End of curve i, use as is
+                        curve_i_ordered = curve_i_points
+
+                    if ej_idx == 0:
+                        # Start of curve j, use as is
+                        curve_j_ordered = curve_j_points
+                    else:
+                        # End of curve j, so reverse it
+                        curve_j_ordered = curve_j_points[::-1]
+
+                    # Merge: curve_i + arc + curve_j
+                    merged_points = np.vstack([
+                        curve_i_ordered,
+                        arc_points,
+                        curve_j_ordered
+                    ])
+
+                    # Update curve i with the merged result, mark curve j for removal
+                    detected_curves[i]['points'] = merged_points
+                    detected_curves[i]['length'] = cv2.arcLength(merged_points.astype(np.float32).reshape(-1, 1, 2), False)
+                    detected_curves[j]['points'] = np.array([])  # Mark for removal
+
+                # Remove empty curves (marked for removal)
+                detected_curves = [c for c in detected_curves if len(c['points']) > 0]
 
         except Exception as e:
             print(f"  WARNING: Curve extension failed: {e}")
