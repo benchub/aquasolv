@@ -205,26 +205,26 @@ if lines is not None:
                 used[j] = True
 
         if len(similar_group) > 1:
-            # Average the endpoints of all similar lines
-            all_points = []
+            # Find the line that's most horizontal or vertical (prefer axis-aligned)
+            best_line_idx = similar_group[0]
+            best_alignment_score = float('inf')
+
             for idx in similar_group:
                 (x1, y1), (x2, y2) = extended_lines[idx]
-                all_points.extend([(x1, y1), (x2, y2)])
+                dx = x2 - x1
+                dy = y2 - y1
+                angle = np.arctan2(dy, dx) * 180 / np.pi
 
-            # Use the endpoints that span the furthest distance
-            all_points = np.array(all_points)
-            # Find the two points with maximum distance
-            max_dist = 0
-            best_pair = (all_points[0], all_points[1])
-            for p1 in all_points:
-                for p2 in all_points:
-                    dist = np.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
-                    if dist > max_dist:
-                        max_dist = dist
-                        best_pair = (p1, p2)
+                # Calculate how far from horizontal (0°) or vertical (90°)
+                angle_mod = abs(angle) % 90
+                alignment_score = min(angle_mod, 90 - angle_mod)
 
-            merged_lines.append((tuple(best_pair[0]), tuple(best_pair[1])))
-            print(f"  Merged {len(similar_group)} similar lines into one")
+                if alignment_score < best_alignment_score:
+                    best_alignment_score = alignment_score
+                    best_line_idx = idx
+
+            merged_lines.append(extended_lines[best_line_idx])
+            print(f"  Merged {len(similar_group)} similar lines into one (chose most axis-aligned)")
         else:
             merged_lines.append(extended_lines[i])
 
