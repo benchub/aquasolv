@@ -62,7 +62,7 @@ gray = cv2.cvtColor(corner, cv2.COLOR_RGB2GRAY)
 
 # Apply Canny edge detection
 # Use lower thresholds to catch more edges
-edges = cv2.Canny(gray, 30, 100)
+edges = cv2.Canny(gray, 20, 80)  # Lowered from 30,100 to catch fainter edges
 
 # Mask to only detect edges in background (not watermark)
 edges_background = edges.copy()

@@ -27,7 +27,7 @@ def detect_geometric_features(corner, watermark_mask):
         gray = cv2.cvtColor(corner.astype(np.uint8), cv2.COLOR_RGB2GRAY)
 
         # Apply Canny edge detection
-        edges = cv2.Canny(gray, 30, 100)
+        edges = cv2.Canny(gray, 20, 80)  # Lowered from 30,100 to catch fainter edges
 
         # Mask to only detect edges in background (not watermark)
         edges_background = edges.copy()
