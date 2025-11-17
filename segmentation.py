@@ -32,9 +32,13 @@ def detect_geometric_features(corner, watermark_mask):
         # Combine edges from all channels
         edges = np.maximum(np.maximum(edges_r, edges_g), edges_b)
 
-        # Mask to only detect edges in background (not inside watermark)
+        # Dilate watermark mask slightly to also mask edges at the watermark boundary
+        # This prevents detecting the watermark diamond edge as a background feature
+        dilated_watermark = binary_dilation(watermark_mask, iterations=2)
+
+        # Mask to only detect edges in background (not inside or at boundary of watermark)
         edges_background = edges.copy()
-        edges_background[watermark_mask] = 0
+        edges_background[dilated_watermark] = 0
 
         # Detect lines using Hough transform
         # Lowered thresholds to catch fainter/shorter lines
