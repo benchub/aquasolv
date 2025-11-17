@@ -23,13 +23,16 @@ def detect_geometric_features(corner, watermark_mask):
         List of line segments as ((x1, y1), (x2, y2)) tuples, or None if detection fails
     """
     try:
-        # Convert to grayscale
-        gray = cv2.cvtColor(corner.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        # Apply Canny edge detection on each RGB channel to catch color boundaries
+        # that have similar grayscale values but different RGB values
+        edges_r = cv2.Canny(corner[:, :, 0].astype(np.uint8), 20, 80)
+        edges_g = cv2.Canny(corner[:, :, 1].astype(np.uint8), 20, 80)
+        edges_b = cv2.Canny(corner[:, :, 2].astype(np.uint8), 20, 80)
 
-        # Apply Canny edge detection
-        edges = cv2.Canny(gray, 20, 80)  # Lowered from 30,100 to catch fainter edges
+        # Combine edges from all channels
+        edges = np.maximum(np.maximum(edges_r, edges_g), edges_b)
 
-        # Mask to only detect edges in background (not watermark)
+        # Mask to only detect edges in background (not inside watermark)
         edges_background = edges.copy()
         edges_background[watermark_mask] = 0
 

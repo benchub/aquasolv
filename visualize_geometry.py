@@ -16,7 +16,7 @@ Example:
 import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from scipy.ndimage import binary_dilation
+from scipy.ndimage import binary_dilation, binary_erosion
 from segmentation import find_segments
 import cv2
 
@@ -57,14 +57,16 @@ print(f"Total segments: {len(segment_info)}")
 # Detect geometric features (lines/edges) in the background
 print("\n=== Detecting Geometric Features ===")
 
-# Convert corner to grayscale for edge detection
-gray = cv2.cvtColor(corner, cv2.COLOR_RGB2GRAY)
+# Apply Canny edge detection on each RGB channel to catch color boundaries
+# that have similar grayscale values but different RGB values
+edges_r = cv2.Canny(corner[:, :, 0].astype(np.uint8), 20, 80)
+edges_g = cv2.Canny(corner[:, :, 1].astype(np.uint8), 20, 80)
+edges_b = cv2.Canny(corner[:, :, 2].astype(np.uint8), 20, 80)
 
-# Apply Canny edge detection
-# Use lower thresholds to catch more edges
-edges = cv2.Canny(gray, 20, 80)  # Lowered from 30,100 to catch fainter edges
+# Combine edges from all channels
+edges = np.maximum(np.maximum(edges_r, edges_g), edges_b)
 
-# Mask to only detect edges in background (not watermark)
+# Mask to only detect edges in background (not inside watermark)
 edges_background = edges.copy()
 edges_background[watermark_mask] = 0
 
