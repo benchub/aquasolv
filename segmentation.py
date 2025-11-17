@@ -93,6 +93,86 @@ def detect_geometric_features(corner, watermark_mask):
                 _, ext_x2, ext_y2 = t_values[-1]
                 extended_lines.append(((ext_x1, ext_y1), (ext_x2, ext_y2)))
 
+        # Merge nearly-parallel lines that are very close together
+        # This prevents duplicate detection of the same line as multiple segments
+        def lines_are_similar(line1, line2, angle_threshold=3.0, distance_threshold=2.0):
+            """Check if two lines are nearly parallel and close together."""
+            (x1, y1), (x2, y2) = line1
+            (x3, y3), (x4, y4) = line2
+
+            # Calculate angles
+            angle1 = np.arctan2(y2 - y1, x2 - x1)
+            angle2 = np.arctan2(y4 - y3, x4 - x3)
+            angle_diff = abs(angle1 - angle2) * 180 / np.pi
+            if angle_diff > 90:
+                angle_diff = 180 - angle_diff
+
+            if angle_diff > angle_threshold:
+                return False
+
+            # Calculate perpendicular distance from line1's midpoint to line2
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+
+            # Distance from point (mid_x, mid_y) to line through (x3,y3) and (x4,y4)
+            line_len = np.sqrt((x4 - x3)**2 + (y4 - y3)**2)
+            if line_len < 1e-6:
+                return False
+
+            dist = abs((y4 - y3) * mid_x - (x4 - x3) * mid_y + x4 * y3 - y4 * x3) / line_len
+
+            return dist < distance_threshold
+
+        # Find and merge similar lines
+        merged_lines = []
+        used = [False] * len(extended_lines)
+
+        for i in range(len(extended_lines)):
+            if used[i]:
+                continue
+
+            # Find all lines similar to line i
+            similar_group = [i]
+            for j in range(i + 1, len(extended_lines)):
+                if not used[j] and lines_are_similar(extended_lines[i], extended_lines[j]):
+                    similar_group.append(j)
+                    used[j] = True
+
+            if len(similar_group) > 1:
+                # Average the endpoints of all similar lines
+                all_points = []
+                for idx in similar_group:
+                    (x1, y1), (x2, y2) = extended_lines[idx]
+                    all_points.extend([(x1, y1), (x2, y2)])
+
+                # Use the endpoints that span the furthest distance
+                all_points = np.array(all_points)
+                # Find the two points with maximum distance
+                max_dist = 0
+                best_pair = (all_points[0], all_points[1])
+                for p1 in all_points:
+                    for p2 in all_points:
+                        dist = np.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
+                        if dist > max_dist:
+                            max_dist = dist
+                            best_pair = (p1, p2)
+
+                merged_lines.append((tuple(best_pair[0]), tuple(best_pair[1])))
+            else:
+                merged_lines.append(extended_lines[i])
+
+            used[i] = True
+
+        extended_lines = merged_lines
+        # Update detected_lines to match (keep only the ones that weren't merged away)
+        new_detected = []
+        idx = 0
+        for i in range(len(detected_lines)):
+            if idx < len(extended_lines):
+                new_detected.append(detected_lines[i])
+                idx += 1
+        detected_lines = new_detected[:len(extended_lines)]
+
         # Find intersections between lines inside watermark
         def line_intersection(line1, line2):
             (x1, y1), (x2, y2) = line1
