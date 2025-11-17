@@ -34,8 +34,9 @@ def detect_geometric_features(corner, watermark_mask):
         edges_background[watermark_mask] = 0
 
         # Detect lines using Hough transform
-        lines = cv2.HoughLinesP(edges_background, rho=1, theta=np.pi/180, threshold=20,
-                                minLineLength=15, maxLineGap=15)
+        # Lowered thresholds to catch fainter/shorter lines
+        lines = cv2.HoughLinesP(edges_background, rho=1, theta=np.pi/180, threshold=15,
+                                minLineLength=10, maxLineGap=20)
 
         if lines is None or len(lines) == 0:
             return None

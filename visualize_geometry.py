@@ -71,8 +71,9 @@ edges_background[watermark_mask] = 0
 print(f"Edge detection: found {np.sum(edges_background > 0)} edge pixels in background")
 
 # Detect lines using Hough transform with more sensitive parameters
-lines = cv2.HoughLinesP(edges_background, rho=1, theta=np.pi/180, threshold=20,
-                        minLineLength=15, maxLineGap=15)
+# Use same parameters as segmentation.py
+lines = cv2.HoughLinesP(edges_background, rho=1, theta=np.pi/180, threshold=15,
+                        minLineLength=10, maxLineGap=20)
 
 def line_intersection(line1, line2):
     """Find intersection point of two lines. Returns (x, y) or None."""
