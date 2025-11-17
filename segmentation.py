@@ -675,9 +675,10 @@ def create_partitions(watermark_mask, lines, curves):
             ix, iy = int(round(x)), int(round(y))
             if 0 <= ix < w and 0 <= iy < h:
                 barrier_map[iy, ix] = True
-                # Make it 2-pixels thick for good separation
-                for di in range(-1, 2):
-                    for dj in range(-1, 2):
+                # Make barriers 3x3 for proper separation
+                # We'll handle small isolated corner groups by merging tiny partitions later
+                for di in [-1, 0, 1]:
+                    for dj in [-1, 0, 1]:
                         ni, nj = iy + di, ix + dj
                         if 0 <= ni < h and 0 <= nj < w:
                             barrier_map[ni, nj] = True
@@ -707,6 +708,44 @@ def create_partitions(watermark_mask, lines, curves):
     partition_map = np.full((h, w), -1, dtype=int)
     partition_map[connectable_region] = labeled[connectable_region] - 1  # Make 0-indexed
 
+    # IMPORTANT: Merge tiny partitions into their neighbors to avoid corner isolation
+    # Small pixel groups near line intersections should not form separate partitions
+    if num_partitions > 1:
+        # Count partition sizes
+        partition_sizes = {}
+        for pid in range(num_partitions):
+            partition_sizes[pid] = np.sum(partition_map == pid)
+
+        # Merge partitions smaller than threshold (50 pixels)
+        small_threshold = 50
+        for small_pid in range(num_partitions):
+            if partition_sizes[small_pid] >= small_threshold:
+                continue
+
+            # Find neighbor partitions by dilating this partition by 1 pixel
+            small_mask = (partition_map == small_pid)
+            dilated = binary_dilation(small_mask, iterations=1)
+            neighbors_mask = dilated & (partition_map >= 0) & (partition_map != small_pid)
+
+            if np.any(neighbors_mask):
+                # Find which neighbor partition shares the most boundary pixels
+                neighbor_pids, counts = np.unique(partition_map[neighbors_mask], return_counts=True)
+                most_common_neighbor = neighbor_pids[np.argmax(counts)]
+
+                # Merge small partition into the most common neighbor
+                partition_map[small_mask] = most_common_neighbor
+                partition_sizes[most_common_neighbor] += partition_sizes[small_pid]
+                partition_sizes[small_pid] = 0
+
+        # Renumber partitions to be contiguous (0, 1, 2, ...)
+        unique_pids = sorted([pid for pid in partition_sizes if partition_sizes[pid] > 0])
+        pid_remap = {old_pid: new_pid for new_pid, old_pid in enumerate(unique_pids)}
+        new_partition_map = np.full((h, w), -1, dtype=int)
+        for old_pid, new_pid in pid_remap.items():
+            new_partition_map[partition_map == old_pid] = new_pid
+        partition_map = new_partition_map
+        num_partitions = len(unique_pids)
+
     # Handle barrier pixels: assign them to nearest partition
     barrier_pixels = np.argwhere(watermark_mask & barrier_map)
     if len(barrier_pixels) > 0 and num_partitions > 0:
@@ -723,7 +762,8 @@ def create_partitions(watermark_mask, lines, curves):
     # Use propagation approach: dilate each partition separately, respecting barriers
     if num_partitions > 0:
         # Dilate each partition outward into boundary, but stop at barrier pixels
-        for iteration in range(6):  # 6 iterations matches boundary dilation
+        # Use 20 iterations to cover boundary region (watermark boundary can be up to 15 pixels away)
+        for iteration in range(20):  # Increased from 6 to 20 to match increased boundary dilation
             for partition_id in range(num_partitions):
                 # Get current partition pixels
                 partition_pixels = (partition_map == partition_id)
@@ -748,8 +788,8 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     the space. Segmentation and merging happen INDEPENDENTLY within each partition.
     """
     core_mask = template > core_threshold
-    edge_mask = (template > 0.005) & (template <= core_threshold)
-    watermark_mask = (template > 0.005)
+    edge_mask = (template > 0.001) & (template <= core_threshold)  # Lowered from 0.005 to catch faint edge pixels
+    watermark_mask = (template > 0.001)  # Lowered from 0.005
 
     # Auto-determine quantization based on color variance if not specified
     color_std = None
@@ -846,6 +886,55 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
                     next_segment_id += 1
 
     print(f'Found {len(segment_info)} initial segments across {num_partitions} partitions')
+
+    # SECOND PASS: Create segments from edge pixels (template <= core_threshold)
+    # This ensures edge pixels get their own segments instead of being unassigned
+    # Use COARSER quantization for edge pixels to group similar colors together
+    edge_quantization = max(30, quantization * 2)  # At least 30, or 2x main quantization
+    edge_color_map = (corner // edge_quantization) * edge_quantization
+
+    initial_segment_count = len(segment_info)
+    for partition_id in range(num_partitions):
+        partition_mask = (partition_map == partition_id) & edge_mask
+        if np.sum(partition_mask) < 1:  # At least 1 pixel
+            continue
+
+        # Find color segments in edge pixels WITHIN this partition, using coarser quantization
+        unique_colors = np.unique(edge_color_map[partition_mask].reshape(-1, 3), axis=0)
+
+        for color in unique_colors:
+            color_mask = np.all(edge_color_map == color, axis=2) & partition_mask
+            if np.sum(color_mask) < 1:  # At least 1 pixel
+                continue
+
+            structure = np.ones((3, 3), dtype=int)
+            labeled, num_features = connected_components_label(color_mask, structure=structure)
+
+            for component_id in range(1, num_features + 1):
+                component_mask = (labeled == component_id)
+                if np.sum(component_mask) >= 1:  # Accept even single pixels
+                    segments[component_mask] = next_segment_id
+                    centroid = np.mean(np.argwhere(component_mask), axis=0)
+                    segment_info.append({
+                        'id': next_segment_id,
+                        'size': np.sum(component_mask),
+                        'mask': component_mask,
+                        'centroid': centroid,
+                        'color': tuple(color),
+                        'partition': partition_id,
+                        'is_edge_segment': True  # Mark as edge-only segment
+                    })
+                    next_segment_id += 1
+
+    edge_segments_created = len(segment_info) - initial_segment_count
+    if edge_segments_created > 0:
+        print(f'Created {edge_segments_created} additional segments from edge pixels')
+        # Debug: show edge segments per partition
+        for pid in range(num_partitions):
+            edge_segs_in_partition = [s for s in segment_info[initial_segment_count:] if s.get('partition') == pid]
+            if edge_segs_in_partition:
+                total_pixels = sum(s['size'] for s in edge_segs_in_partition)
+                print(f'  Partition {pid}: {len(edge_segs_in_partition)} edge segments, {total_pixels} pixels total')
 
     # Merge identical colors WITHIN each partition
     merged_count = 0

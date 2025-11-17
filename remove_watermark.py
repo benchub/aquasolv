@@ -403,6 +403,93 @@ def segmented_inpaint_watermark(img_array, template_mask):
     segment_all_coords = []
     segment_all_ids = []
 
+    # BEFORE processing segments: assign unassigned watermark pixels to nearest color-matching segment
+    # This prevents edge pixels from being absorbed by the wrong segment during expansion
+    # NOTE: After adding edge segment creation, edge pixels now get their own segments
+    # So we can DISABLE this assignment logic - it's no longer needed and can cause incorrect assignments
+    watermark_mask = core_mask | edge_mask  # All watermark pixels (core + edge)
+    unassigned_mask = (segments == -1) & watermark_mask
+
+    # DISABLED: Edge segments now handle this
+    if False and np.any(unassigned_mask):
+        unassigned_coords = np.argwhere(unassigned_mask)
+        print(f"  Assigning {len(unassigned_coords)} unassigned edge pixels to segments...")
+
+        # For each segment, get its median color
+        segment_colors = {}
+        for segment_id in unique_segments:
+            segment_mask = (segments == segment_id)
+            if np.any(segment_mask):
+                segment_pixels = corner[segment_mask]
+                segment_colors[segment_id] = np.median(segment_pixels, axis=0)
+
+        # For each unassigned pixel, find the nearest segment by color and spatial distance
+        # IMPORTANT: Respect partition boundaries - only assign to segments in same partition
+        for y, x in unassigned_coords:
+            pixel_color = corner[y, x].astype(float)
+
+            # Get partition ID for this pixel
+            pixel_partition = partition_map[y, x] if partition_map is not None else 0
+
+            # Find segments within reasonable spatial distance (dilate by 10 pixels)
+            best_segment = None
+            best_score = float('inf')
+
+            for segment_id in unique_segments:
+                # CRITICAL: Only consider segments in the same partition!
+                segment_partition = None
+                if partition_map is not None:
+                    for info in segment_info:
+                        if info['id'] == segment_id:
+                            segment_partition = info.get('partition', None)  # Note: field is 'partition' not 'partition_id'
+                            break
+
+                if partition_map is not None and segment_partition is not None:
+                    if segment_partition != pixel_partition:
+                        continue  # Different partition - skip
+
+                segment_mask = (segments == segment_id)
+                # Check if this segment is nearby (within 10 pixels)
+                segment_dilated = binary_dilation(segment_mask, iterations=10)
+                if not segment_dilated[y, x]:
+                    continue  # Too far away
+
+                # Calculate color similarity
+                seg_color = segment_colors[segment_id]
+                color_dist = np.sqrt(np.sum((pixel_color - seg_color) ** 2))
+
+                # Calculate spatial distance to nearest pixel in segment
+                segment_coords = np.argwhere(segment_mask)
+                spatial_dist = np.min(np.sqrt(np.sum((segment_coords - [y, x]) ** 2, axis=1)))
+
+                # Combined score (weighted: color is MUCH more important than distance)
+                score = color_dist + 0.1 * spatial_dist
+
+                if score < best_score:
+                    best_score = score
+                    best_segment = segment_id
+
+            # Assign to best matching segment
+            if best_segment is not None:
+                segments[y, x] = best_segment
+
+        newly_assigned = np.sum((segments != -1) & unassigned_mask)
+        still_unassigned = np.sum((segments == -1) & watermark_mask)
+
+        # Count how many pixels were assigned to each segment
+        assignment_counts = {}
+        for y, x in unassigned_coords:
+            seg = segments[y, x]
+            if seg != -1:
+                assignment_counts[seg] = assignment_counts.get(seg, 0) + 1
+
+        print(f"    Assigned {newly_assigned} edge pixels to color-matching segments:")
+        for seg_id in sorted(assignment_counts.keys()):
+            print(f"      Segment {seg_id}: {assignment_counts[seg_id]} pixels")
+
+        if still_unassigned > 0:
+            print(f"    WARNING: {still_unassigned} watermark pixels still unassigned after assignment")
+
     for segment_id in unique_segments:
         # Get pixels in this segment
         segment_mask = (segments == segment_id)
@@ -513,8 +600,12 @@ def segmented_inpaint_watermark(img_array, template_mask):
             if partition_map is not None and segment_partition is not None:
                 # Filter to only pixels in the same partition
                 # partition_map now extends into boundary region, so this works directly
+                before_filter = np.sum(boundary_contact)
                 same_partition_mask = (partition_map == segment_partition)
                 boundary_contact = boundary_contact & same_partition_mask
+                after_filter = np.sum(boundary_contact)
+                if before_filter != after_filter:
+                    print(f"      Partition filter: {before_filter} pixels -> {after_filter} pixels (partition {segment_partition})")
 
             # Sample ALL reachable boundary pixels for accurate color representation
             boundary_coords = np.argwhere(boundary_contact)
@@ -543,7 +634,8 @@ def segmented_inpaint_watermark(img_array, template_mask):
                     boundary_contention = boundary_contention[uncontested_mask]
 
                 # Compute weighted median
-                weights = 1.0 / boundary_contention  # Inverse of contention count
+                # Add small epsilon to avoid divide by zero
+                weights = 1.0 / (boundary_contention + 0.01)  # Inverse of contention count
                 fill_color = compute_weighted_median(boundary_colors, weights)
 
                 contested_count = np.sum(boundary_contention > 1)
@@ -578,6 +670,12 @@ def segmented_inpaint_watermark(img_array, template_mask):
             # CRITICAL: Also exclude pixels that belong to other segments
             # This prevents expansion from bleeding across segment boundaries
             newly_expanded = newly_expanded & ((segments == segment_id) | (segments == -1))
+
+            # CRITICAL: Also respect partition boundaries - don't expand across partitions
+            if partition_map is not None and segment_partition is not None:
+                same_partition = (partition_map == segment_partition)
+                newly_expanded = newly_expanded & same_partition
+
             segment_to_fill = segment_mask | newly_expanded
             segment_expanded_coords = np.argwhere(segment_to_fill)
         else:
@@ -641,6 +739,40 @@ def segmented_inpaint_watermark(img_array, template_mask):
             # Use that segment's fill color
             fill_color = segment_fill_colors[closest_segment_id]
             corner[ey, ex] = fill_color
+
+    # Step 4: Fill any remaining unassigned pixels in watermark region
+    # These are very faint pixels (template < edge threshold) that didn't form segments
+    # Fill them with color from nearest same-partition filled pixel
+    remaining_unassigned = np.all(corner == corner_original, axis=2) & (template_mask > 0)
+    num_unassigned = np.sum(remaining_unassigned)
+    if num_unassigned > 0:
+        print(f"  Filling {num_unassigned} remaining unassigned watermark pixels...")
+        unassigned_coords = np.argwhere(remaining_unassigned)
+
+        for uy, ux in unassigned_coords:
+            # Get partition for this pixel
+            pixel_partition = partition_map[uy, ux] if partition_map is not None else None
+
+            if pixel_partition is not None and pixel_partition >= 0:
+                # Find nearest filled pixel in same partition
+                best_dist = float('inf')
+                best_color = None
+
+                # Check neighborhood (within 10 pixels)
+                for dy in range(-10, 11):
+                    for dx in range(-10, 11):
+                        ny, nx = uy + dy, ux + dx
+                        if 0 <= ny < corner.shape[0] and 0 <= nx < corner.shape[1]:
+                            # Check if filled and same partition
+                            if not np.array_equal(corner[ny, nx], corner_original[ny, nx]):  # Pixel was filled
+                                if partition_map is None or partition_map[ny, nx] == pixel_partition:
+                                    dist = abs(dy) + abs(dx)  # Manhattan distance
+                                    if dist < best_dist:
+                                        best_dist = dist
+                                        best_color = corner[ny, nx]
+
+                if best_color is not None:
+                    corner[uy, ux] = best_color
 
     result[y_start:, x_start:] = corner
     return result
