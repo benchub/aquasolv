@@ -245,14 +245,15 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
 
                 # Dilate watermark mask to exclude boundary edges
                 dilated_watermark = binary_dilation(watermark_mask, iterations=2)
-                edges_background = edges.copy()
-                edges_background[dilated_watermark] = 0
 
-                contours, _ = cv2.findContours(edges_background, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                # Detect contours from full edges (not just background) to catch curves
+                # that go through the watermark
+                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
                 for contour in contours:
                     arc_length = cv2.arcLength(contour, False)
-                    if arc_length < 40:
+                    # Lower threshold to catch curve segments split by watermark
+                    if arc_length < 25:
                         continue
 
                     epsilon = 0.5
@@ -272,6 +273,18 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                             if x_span < 30 and y_span < 30:
                                 continue
 
+                            # Verify curve has points in background (not entirely in watermark)
+                            points_in_background = 0
+                            for pt in points:
+                                px, py = int(pt[0]), int(pt[1])
+                                if 0 <= px < 100 and 0 <= py < 100:
+                                    if not dilated_watermark[py, px]:
+                                        points_in_background += 1
+
+                            # Require at least 20% of points in background
+                            if points_in_background < len(points) * 0.2:
+                                continue
+
                             detected_curves.append({
                                 'points': points,
                                 'length': arc_length,
@@ -280,6 +293,91 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
 
             except Exception as e:
                 print(f"WARNING: Curve detection failed: {e}")
+
+            # Extend curves through watermark and find intersections
+            if len(detected_curves) >= 2:
+                try:
+                    # Extrapolate each curve's endpoints into the watermark
+                    for idx, curve in enumerate(detected_curves):
+                        points = curve['points']
+
+                        # Extrapolate from start
+                        if len(points) >= 3:
+                            p0, p1, p2 = points[0], points[1], points[2]
+                            dx = p0[0] - p1[0]
+                            dy = p0[1] - p1[1]
+                            length = np.sqrt(dx*dx + dy*dy)
+                            if length > 0:
+                                dx /= length
+                                dy /= length
+                                new_point = p0 + np.array([dx * 50, dy * 50])
+                                if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
+                                    if watermark_mask[int(new_point[1]), int(new_point[0])]:
+                                        curve['points'] = np.vstack([new_point, points])
+
+                        # Extrapolate from end
+                        if len(points) >= 3:
+                            p0, p1, p2 = points[-1], points[-2], points[-3]
+                            dx = p0[0] - p1[0]
+                            dy = p0[1] - p1[1]
+                            length = np.sqrt(dx*dx + dy*dy)
+                            if length > 0:
+                                dx /= length
+                                dy /= length
+                                new_point = p0 + np.array([dx * 50, dy * 50])
+                                if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
+                                    if watermark_mask[int(new_point[1]), int(new_point[0])]:
+                                        curve['points'] = np.vstack([curve['points'], new_point])
+
+                    # Check which curves might connect (endpoints close together inside watermark)
+                    curve_connections = []
+                    for i in range(len(detected_curves)):
+                        for j in range(i + 1, len(detected_curves)):
+                            curve_i = detected_curves[i]
+                            curve_j = detected_curves[j]
+
+                            # Check all endpoint pairs
+                            endpoints_i = [curve_i['points'][0], curve_i['points'][-1]]
+                            endpoints_j = [curve_j['points'][0], curve_j['points'][-1]]
+
+                            for ei_idx, ei in enumerate(endpoints_i):
+                                for ej_idx, ej in enumerate(endpoints_j):
+                                    dist = np.sqrt((ei[0] - ej[0])**2 + (ei[1] - ej[1])**2)
+
+                                    # If endpoints are close and both inside watermark, they might connect
+                                    if dist < 35:  # Within 35 pixels
+                                        ix, iy = (ei + ej) / 2
+                                        if 0 <= int(ix) < 100 and 0 <= int(iy) < 100:
+                                            if watermark_mask[int(iy), int(ix)]:
+                                                # This is a potential connection point inside the watermark
+                                                curve_connections.append({
+                                                    'curves': (i, j),
+                                                    'endpoints': (ei_idx, ej_idx),
+                                                    'meeting_point': (ix, iy),
+                                                    'distance': dist
+                                                })
+
+                    # Extend curves to their meeting points
+                    if curve_connections:
+                        for conn in curve_connections:
+                            i, j = conn['curves']
+                            ei_idx, ej_idx = conn['endpoints']
+                            meeting_point = conn['meeting_point']
+
+                            # Extend curve i to meeting point
+                            if ei_idx == 0:  # Start of curve i
+                                detected_curves[i]['points'] = np.vstack([meeting_point, detected_curves[i]['points']])
+                            else:  # End of curve i
+                                detected_curves[i]['points'] = np.vstack([detected_curves[i]['points'], meeting_point])
+
+                            # Extend curve j to meeting point
+                            if ej_idx == 0:  # Start of curve j
+                                detected_curves[j]['points'] = np.vstack([meeting_point, detected_curves[j]['points']])
+                            else:  # End of curve j
+                                detected_curves[j]['points'] = np.vstack([detected_curves[j]['points'], meeting_point])
+
+                except Exception as e:
+                    print(f"WARNING: Curve extension failed: {e}")
 
             return {
                 'lines': trimmed_lines,
