@@ -113,19 +113,6 @@ def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contentio
                 contention_ratio = dark_contention / bright_contention if bright_contention > 0 else 0
                 less_contested = "dark"
 
-            # FRAME/BORDER DETECTION: If one cluster is very dark (lum < 50), it's likely a frame border
-            # Prefer dark borders even if they're smaller
-            # For small samples (<20 pixels), require at least 3 dark pixels
-            # For larger samples, require at least 15% to avoid false positives
-            dark_mean_lum = np.mean(luminances[dark_mask]) if dark_count > 0 else 255
-            bright_mean_lum = np.mean(luminances[bright_mask]) if bright_count > 0 else 255
-
-            min_dark_pixels = 3 if len(boundary_colors) < 20 else max(3, int(len(boundary_colors) * 0.15))
-            if dark_mean_lum < 50 and dark_count >= min_dark_pixels:
-                # Dark cluster is very dark (likely border) with sufficient representation
-                print(f"    Segment {segment_id}: Filtered out {bright_count} bright outliers (dark border/frame detected, gap={max_gap:.0f})")
-                return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
-
             # Only use contention to decide if one cluster is SIGNIFICANTLY less contested (ratio < 0.7)
             # AND the size difference isn't too extreme (ratio > 0.5, meaning smaller is at least 50% of larger)
             if less_contested == "dark" and contention_ratio < 0.7 and size_ratio > 0.5:
@@ -331,8 +318,6 @@ def segmented_inpaint_watermark(img_array, template_mask):
     bg_variance = seg_result['bg_variance']
     detected_curves = seg_result.get('detected_curves', [])
     partition_map = seg_result.get('partition_map', None)
-    partition_boundaries = seg_result.get('partition_boundaries', {})
-    detected_lines = seg_result.get('detected_lines', [])
 
     unique_segments = [info['id'] for info in segment_info]
 
@@ -560,41 +545,6 @@ def segmented_inpaint_watermark(img_array, template_mask):
                     same_partition_mask = (partition_map == segment_partition)
                     contact_points = contact_points & same_partition_mask
 
-                    # DIRECTIONAL SAMPLING: Use only the lines that bound THIS partition
-                    # This prevents sampling across partition barriers to wrong backgrounds
-                    partition_lines = partition_boundaries.get(segment_partition, []) if segment_partition is not None else []
-                    if partition_lines and np.any(contact_points):
-                        # Save partition-filtered contact_points before directional filtering
-                        contact_points_before_directional = contact_points.copy()
-
-                        # Get segment centroid
-                        seg_centroid = segment_coords.mean(axis=0)
-
-                        # Filter boundary pixels that cross partition barriers
-                        contact_coords = np.argwhere(contact_points)
-                        valid_contact_mask = np.zeros_like(contact_points)
-
-                        for cy, cx in contact_coords:
-                            # Check if this contact point is on opposite side of any barrier line
-                            crosses_barrier = False
-                            for line in partition_lines:
-                                (lx1, ly1), (lx2, ly2) = line
-                                # Cross product to determine which side of line
-                                seg_cross = (lx2 - lx1) * (seg_centroid[0] - ly1) - (ly2 - ly1) * (seg_centroid[1] - lx1)
-                                contact_cross = (lx2 - lx1) * (cy - ly1) - (ly2 - ly1) * (cx - lx1)
-                                if seg_cross * contact_cross < 0:
-                                    crosses_barrier = True
-                                    break
-                            if not crosses_barrier:
-                                valid_contact_mask[cy, cx] = True
-
-                        contact_points = contact_points & valid_contact_mask
-
-                        # FALLBACK: If directional filtering removed ALL samples (segment surrounded by barriers),
-                        # revert to partition-filtered samples. The barrier lines ARE the target to sample from.
-                        if not np.any(contact_points):
-                            contact_points = contact_points_before_directional
-
                 if np.any(contact_points):
                     # These are the points just outside watermark where segment reaches
                     segment_boundary_colors = corner_original[contact_points]  # Use original, not processed
@@ -646,9 +596,6 @@ def segmented_inpaint_watermark(img_array, template_mask):
             # Find pixels that are: (1) reached by dilated segment, AND (2) in the watermark boundary ring
             boundary_contact = segment_dilated & watermark_boundary
 
-            # Track if directional fallback is used (segment surrounded by barriers)
-            used_fallback = False
-
             # If partitions exist, only sample from boundary pixels in the same partition
             if partition_map is not None and segment_partition is not None:
                 # Filter to only pixels in the same partition
@@ -660,43 +607,6 @@ def segmented_inpaint_watermark(img_array, template_mask):
                 if before_filter != after_filter:
                     print(f"      Partition filter: {before_filter} pixels -> {after_filter} pixels (partition {segment_partition})")
 
-                # DIRECTIONAL SAMPLING: Use only the lines that bound THIS partition
-                # This prevents sampling across partition barriers to wrong backgrounds
-                partition_lines = partition_boundaries.get(segment_partition, []) if segment_partition is not None else []
-                if partition_lines and np.any(boundary_contact):
-                    # Save partition-filtered boundary_contact before directional filtering
-                    boundary_contact_before_directional = boundary_contact.copy()
-
-                    # Get segment centroid
-                    seg_centroid = segment_coords.mean(axis=0)
-
-                    # Filter boundary pixels that cross partition barriers
-                    boundary_coords_temp = np.argwhere(boundary_contact)
-                    valid_boundary_mask = np.zeros_like(boundary_contact)
-
-                    for by, bx in boundary_coords_temp:
-                        # Check if this boundary pixel is on opposite side of any barrier line
-                        crosses_barrier = False
-                        for line in partition_lines:
-                            (lx1, ly1), (lx2, ly2) = line
-                            # Cross product to determine which side of line
-                            seg_cross = (lx2 - lx1) * (seg_centroid[0] - ly1) - (ly2 - ly1) * (seg_centroid[1] - lx1)
-                            boundary_cross = (lx2 - lx1) * (by - ly1) - (ly2 - ly1) * (bx - lx1)
-                            if seg_cross * boundary_cross < 0:
-                                crosses_barrier = True
-                                break
-                        if not crosses_barrier:
-                            valid_boundary_mask[by, bx] = True
-
-                    boundary_contact = boundary_contact & valid_boundary_mask
-
-                    # FALLBACK: If directional filtering removed ALL samples (segment surrounded by barriers),
-                    # revert to partition-filtered samples. The barrier lines ARE the target to sample from.
-                    if not np.any(boundary_contact):
-                        print(f"    Segment {segment_id}: Directional filter removed all samples, using partition-filtered samples as fallback")
-                        boundary_contact = boundary_contact_before_directional
-                        used_fallback = True
-
             # Sample ALL reachable boundary pixels for accurate color representation
             boundary_coords = np.argwhere(boundary_contact)
             boundary_colors = corner_original[boundary_contact]
@@ -706,32 +616,9 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
             if len(boundary_colors) > 0:
                 # Apply contention-aware outlier filtering
-                # IMPORTANT: When fallback was used (sampling from barriers), prefer DARKER cluster
-                # since barriers are typically darker than backgrounds
-                if used_fallback and len(boundary_colors) >= 4:
-                    # When sampling from barriers after fallback, check for two clusters
-                    luminance = np.mean(boundary_colors, axis=1)
-                    sorted_lum = np.sort(luminance)
-                    gaps = np.diff(sorted_lum)
-
-                    if len(gaps) > 0 and np.max(gaps) > 50:
-                        # Two distinct clusters - keep the DARKER one (barriers are dark)
-                        large_gap_idx = np.where(gaps > 50)[0][0] + 1
-                        cluster1 = sorted_lum[:large_gap_idx]
-                        cluster2 = sorted_lum[large_gap_idx:]
-                        # Choose darker cluster (lower luminance)
-                        darker_cluster = cluster1 if np.mean(cluster1) < np.mean(cluster2) else cluster2
-                        selected_cluster_mean = np.mean(darker_cluster)
-                        threshold = np.std(darker_cluster) * 2 if len(darker_cluster) > 1 else 20
-                        mask = np.abs(luminance - selected_cluster_mean) <= threshold
-                        boundary_colors = boundary_colors[mask]
-                        boundary_contention = boundary_contention[mask]
-                        print(f"    Segment {segment_id}: Fallback outlier filter selected darker cluster ({len(boundary_colors)} pixels)")
-                else:
-                    # Normal outlier filtering
-                    boundary_colors, boundary_contention, _ = apply_contention_aware_outlier_filtering(
-                        boundary_colors, boundary_contention, segment_id
-                    )
+                boundary_colors, boundary_contention, _ = apply_contention_aware_outlier_filtering(
+                    boundary_colors, boundary_contention, segment_id
+                )
 
                 # If segment has many uncontested pixels, use only those
                 # This releases contested pixels for other segments that may need them
