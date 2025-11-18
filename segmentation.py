@@ -234,10 +234,56 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                 orientation = 'V' if dy > dx else 'H'
                 print(f"    L{i} [{orientation}]: ({x1:.1f},{y1:.1f}) -> ({x2:.1f},{y2:.1f})")
 
-            # No curve detection needed when using full image approach
+            # Detect curves from the corner region (curves are localized, not full-image features)
+            detected_curves = []
+            try:
+                # Edge detection on corner for curve detection
+                edges_r = cv2.Canny(corner[:, :, 0].astype(np.uint8), 20, 80)
+                edges_g = cv2.Canny(corner[:, :, 1].astype(np.uint8), 20, 80)
+                edges_b = cv2.Canny(corner[:, :, 2].astype(np.uint8), 20, 80)
+                edges = np.maximum(np.maximum(edges_r, edges_g), edges_b)
+
+                # Dilate watermark mask to exclude boundary edges
+                dilated_watermark = binary_dilation(watermark_mask, iterations=2)
+                edges_background = edges.copy()
+                edges_background[dilated_watermark] = 0
+
+                contours, _ = cv2.findContours(edges_background, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+                for contour in contours:
+                    arc_length = cv2.arcLength(contour, False)
+                    if arc_length < 40:
+                        continue
+
+                    epsilon = 0.5
+                    approx = cv2.approxPolyDP(contour, epsilon, False)
+
+                    if len(approx) >= 3:
+                        start = approx[0][0]
+                        end = approx[-1][0]
+                        chord_length = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
+
+                        curvature_ratio = arc_length / (chord_length + 0.1)
+                        if curvature_ratio > 1.3:
+                            points = approx.reshape(-1, 2).astype(float)
+
+                            x_span = np.max(points[:, 0]) - np.min(points[:, 0])
+                            y_span = np.max(points[:, 1]) - np.min(points[:, 1])
+                            if x_span < 30 and y_span < 30:
+                                continue
+
+                            detected_curves.append({
+                                'points': points,
+                                'length': arc_length,
+                                'curvature': curvature_ratio
+                            })
+
+            except Exception as e:
+                print(f"WARNING: Curve detection failed: {e}")
+
             return {
                 'lines': trimmed_lines,
-                'curves': []
+                'curves': detected_curves
             }
 
         # Fallback: detect from corner only (old approach)
