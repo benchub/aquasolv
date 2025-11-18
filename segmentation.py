@@ -267,7 +267,13 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
 
                         curvature_ratio = arc_length / (chord_length + 0.1)
                         # Relax curvature for short segments (might be part of larger curve)
-                        min_curvature = 1.2 if arc_length < 30 else 1.3
+                        # But require more curvature for longer curves to filter out nearly-straight lines
+                        if arc_length < 30:
+                            min_curvature = 1.2
+                        elif arc_length < 40:
+                            min_curvature = 1.3
+                        else:  # Long curves must be significantly curved
+                            min_curvature = 1.5
 
                         if curvature_ratio > min_curvature:
                             points = approx.reshape(-1, 2).astype(float)
