@@ -124,6 +124,24 @@ def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contentio
                 print(f"    Segment {segment_id}: Filtered out {dark_count} dark outliers (less contested bright cluster, gap={max_gap:.0f})")
                 return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
             else:
+                # EXTREME LUMINANCE DETECTION: Before defaulting to size, check if one cluster
+                # is at extreme luminance (very dark or very bright border/frame)
+                # Prefer extreme clusters if they represent at least 20% of samples
+                dark_mean_lum = np.mean(luminances[dark_mask]) if dark_count > 0 else 128
+                bright_mean_lum = np.mean(luminances[bright_mask]) if bright_count > 0 else 128
+
+                min_extreme_count = max(3, int(len(boundary_colors) * 0.2))
+
+                # Check for very dark borders (black frames)
+                if dark_mean_lum < 50 and dark_count >= min_extreme_count:
+                    print(f"    Segment {segment_id}: Filtered out {bright_count} bright outliers (dark border detected, gap={max_gap:.0f})")
+                    return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
+
+                # Check for very bright borders (white frames)
+                if bright_mean_lum > 200 and bright_count >= min_extreme_count:
+                    print(f"    Segment {segment_id}: Filtered out {dark_count} dark outliers (bright border detected, gap={max_gap:.0f})")
+                    return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
+
                 # Contention is similar or size difference is too large, prefer the larger cluster
                 if dark_count > bright_count:
                     print(f"    Segment {segment_id}: Filtered out {bright_count} bright outliers (larger dark cluster, gap={max_gap:.0f})")
