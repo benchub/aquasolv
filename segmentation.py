@@ -40,8 +40,9 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
 
             # Detect lines - require them to be reasonably long structural lines
             # Lower minLineLength to catch shorter but strong borders
+            # Use larger maxLineGap to connect broken segments of same border
             lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=40,
-                                    minLineLength=min(img_w, img_h) // 5, maxLineGap=30)
+                                    minLineLength=min(img_w, img_h) // 5, maxLineGap=100)
 
             if lines is None or len(lines) == 0:
                 return None
@@ -76,20 +77,20 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                 passes_through = False
 
                 if is_horizontal:
-                    # Check if y coordinate is in corner region and x spans into it
+                    # Check if line spans into corner region horizontally
                     y_avg = (y1 + y2) / 2
-                    if corner_y_start <= y_avg < img_h:
-                        x_min, x_max = min(x1, x2), max(x1, x2)
-                        if x_max >= corner_x_start:
-                            passes_through = True
+                    x_min, x_max = min(x1, x2), max(x1, x2)
+                    # Accept if line extends into corner's x range and is in corner's y range
+                    if x_max >= corner_x_start and corner_y_start <= y_avg < img_h:
+                        passes_through = True
 
                 if is_vertical:
-                    # Check if x coordinate is in corner region and y spans into it
+                    # Check if line spans into corner region vertically
                     x_avg = (x1 + x2) / 2
-                    if corner_x_start <= x_avg < img_w:
-                        y_min, y_max = min(y1, y2), max(y1, y2)
-                        if y_max >= corner_y_start:
-                            passes_through = True
+                    y_min, y_max = min(y1, y2), max(y1, y2)
+                    # Accept if line extends into corner's y range (regardless of x position)
+                    if y_max >= corner_y_start:
+                        passes_through = True
 
                 if passes_through:
                     # Convert to corner coordinates
