@@ -122,6 +122,30 @@ for info in segment_info:
         boundary_colors = corner[boundary_contact]
         boundary_contention = boundary_segment_count[boundary_contact]
 
+        # LUMINANCE CONSISTENCY CHECK: If segment's own pixels are clearly bright or dark,
+        # only sample boundary pixels with similar luminance to avoid sampling across barriers
+        seg_colors = corner[seg_mask]
+        seg_mean_lum = np.mean(seg_colors)
+
+        if seg_mean_lum > 200:  # Segment is very bright (white/light)
+            # Only sample bright boundary pixels
+            boundary_lum = np.mean(boundary_colors, axis=1)
+            bright_mask = boundary_lum > 150  # More lenient threshold for sampling
+            if np.sum(bright_mask) >= 3:  # Need at least 3 bright samples
+                boundary_colors = boundary_colors[bright_mask]
+                boundary_coords = boundary_coords[bright_mask]
+                boundary_contention = boundary_contention[bright_mask]
+                print(f"    Segment {seg_id}: Filtered to bright boundary pixels ({np.sum(bright_mask)}/{len(boundary_lum)} pixels, seg_lum={seg_mean_lum:.1f})")
+        elif seg_mean_lum < 50:  # Segment is very dark (black)
+            # Only sample dark boundary pixels
+            boundary_lum = np.mean(boundary_colors, axis=1)
+            dark_mask = boundary_lum < 100  # More lenient threshold for sampling
+            if np.sum(dark_mask) >= 3:  # Need at least 3 dark samples
+                boundary_colors = boundary_colors[dark_mask]
+                boundary_coords = boundary_coords[dark_mask]
+                boundary_contention = boundary_contention[dark_mask]
+                print(f"    Segment {seg_id}: Filtered to dark boundary pixels ({np.sum(dark_mask)}/{len(boundary_lum)} pixels, seg_lum={seg_mean_lum:.1f})")
+
         # Sample ALL reachable boundary pixels for accurate color representation
         # Using all pixels gives a much more robust median than cherry-picking a few
         sample_colors = boundary_colors
@@ -178,8 +202,31 @@ for info in segment_info:
                 boundary_coords = np.argwhere(boundary_contact)
                 boundary_colors = corner[boundary_contact]
 
+                # LUMINANCE CONSISTENCY CHECK: Same as for boundary-touching segments
+                seg_colors = corner[seg_mask]
+                seg_mean_lum = np.mean(seg_colors)
+
+                if seg_mean_lum > 200:  # Segment is very bright
+                    boundary_lum = np.mean(boundary_colors, axis=1)
+                    bright_mask = boundary_lum > 150
+                    if np.sum(bright_mask) >= 3:
+                        boundary_colors = boundary_colors[bright_mask]
+                        boundary_coords = boundary_coords[bright_mask]
+                        print(f"    Segment {seg_id} (interior): Filtered to bright boundary pixels ({np.sum(bright_mask)} pixels, seg_lum={seg_mean_lum:.1f})")
+                elif seg_mean_lum < 50:  # Segment is very dark
+                    boundary_lum = np.mean(boundary_colors, axis=1)
+                    dark_mask = boundary_lum < 100
+                    if np.sum(dark_mask) >= 3:
+                        boundary_colors = boundary_colors[dark_mask]
+                        boundary_coords = boundary_coords[dark_mask]
+                        print(f"    Segment {seg_id} (interior): Filtered to dark boundary pixels ({np.sum(dark_mask)} pixels, seg_lum={seg_mean_lum:.1f})")
+
                 # Check contention and release contested pixels if we have enough uncontested ones
                 boundary_contention = boundary_segment_count[boundary_contact]
+                # Need to recompute contention for filtered coords
+                if len(boundary_colors) < len(corner[boundary_contact]):
+                    # Filtering occurred, recompute contention
+                    boundary_contention = boundary_segment_count[boundary_coords[:,0], boundary_coords[:,1]]
                 uncontested_mask = (boundary_contention == 1)
                 num_uncontested = np.sum(uncontested_mask)
                 num_contested = np.sum(~uncontested_mask)
