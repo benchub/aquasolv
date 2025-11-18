@@ -294,90 +294,95 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
             except Exception as e:
                 print(f"WARNING: Curve detection failed: {e}")
 
-            # Extend curves through watermark and find intersections
+            # Connect curves that are arcs of the same circle
             if len(detected_curves) >= 2:
                 try:
-                    # Extrapolate each curve's endpoints into the watermark
-                    for idx, curve in enumerate(detected_curves):
-                        points = curve['points']
+                    # Helper function to fit a circle to points
+                    def fit_circle(points):
+                        # Fit circle using algebraic method
+                        x = points[:, 0]
+                        y = points[:, 1]
+                        A = np.column_stack([x, y, np.ones_like(x)])
+                        b = x**2 + y**2
+                        c, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+                        cx = c[0] / 2
+                        cy = c[1] / 2
+                        r = np.sqrt(c[2] + cx**2 + cy**2)
+                        return cx, cy, r
 
-                        # Extrapolate from start
-                        if len(points) >= 3:
-                            p0, p1, p2 = points[0], points[1], points[2]
-                            dx = p0[0] - p1[0]
-                            dy = p0[1] - p1[1]
-                            length = np.sqrt(dx*dx + dy*dy)
-                            if length > 0:
-                                dx /= length
-                                dy /= length
-                                new_point = p0 + np.array([dx * 50, dy * 50])
-                                if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
-                                    if watermark_mask[int(new_point[1]), int(new_point[0])]:
-                                        curve['points'] = np.vstack([new_point, points])
-
-                        # Extrapolate from end
-                        if len(points) >= 3:
-                            p0, p1, p2 = points[-1], points[-2], points[-3]
-                            dx = p0[0] - p1[0]
-                            dy = p0[1] - p1[1]
-                            length = np.sqrt(dx*dx + dy*dy)
-                            if length > 0:
-                                dx /= length
-                                dy /= length
-                                new_point = p0 + np.array([dx * 50, dy * 50])
-                                if 0 <= int(new_point[0]) < 100 and 0 <= int(new_point[1]) < 100:
-                                    if watermark_mask[int(new_point[1]), int(new_point[0])]:
-                                        curve['points'] = np.vstack([curve['points'], new_point])
-
-                    # Check which curves might connect (endpoints close together inside watermark)
-                    curve_connections = []
+                    # Check each pair of curves to see if they're arcs of the same circle
                     for i in range(len(detected_curves)):
                         for j in range(i + 1, len(detected_curves)):
                             curve_i = detected_curves[i]
                             curve_j = detected_curves[j]
 
-                            # Check all endpoint pairs
-                            endpoints_i = [curve_i['points'][0], curve_i['points'][-1]]
-                            endpoints_j = [curve_j['points'][0], curve_j['points'][-1]]
+                            # Combine points from both curves
+                            combined_points = np.vstack([curve_i['points'], curve_j['points']])
 
-                            for ei_idx, ei in enumerate(endpoints_i):
-                                for ej_idx, ej in enumerate(endpoints_j):
-                                    dist = np.sqrt((ei[0] - ej[0])**2 + (ei[1] - ej[1])**2)
+                            # Fit a circle to the combined points
+                            if len(combined_points) >= 3:
+                                cx, cy, r = fit_circle(combined_points)
 
-                                    # If endpoints are close and both inside watermark, they might connect
-                                    if dist < 35:  # Within 35 pixels
-                                        ix, iy = (ei + ej) / 2
-                                        if 0 <= int(ix) < 100 and 0 <= int(iy) < 100:
-                                            if watermark_mask[int(iy), int(ix)]:
-                                                # This is a potential connection point inside the watermark
-                                                curve_connections.append({
-                                                    'curves': (i, j),
-                                                    'endpoints': (ei_idx, ej_idx),
-                                                    'meeting_point': (ix, iy),
-                                                    'distance': dist
-                                                })
+                                # Check if both curves fit the circle well
+                                errors_i = np.abs(np.sqrt((curve_i['points'][:, 0] - cx)**2 + (curve_i['points'][:, 1] - cy)**2) - r)
+                                errors_j = np.abs(np.sqrt((curve_j['points'][:, 0] - cx)**2 + (curve_j['points'][:, 1] - cy)**2) - r)
 
-                    # Extend curves to their meeting points
-                    if curve_connections:
-                        for conn in curve_connections:
-                            i, j = conn['curves']
-                            ei_idx, ej_idx = conn['endpoints']
-                            meeting_point = conn['meeting_point']
+                                max_error_i = np.max(errors_i)
+                                max_error_j = np.max(errors_j)
 
-                            # Extend curve i to meeting point
-                            if ei_idx == 0:  # Start of curve i
-                                detected_curves[i]['points'] = np.vstack([meeting_point, detected_curves[i]['points']])
-                            else:  # End of curve i
-                                detected_curves[i]['points'] = np.vstack([detected_curves[i]['points'], meeting_point])
+                                # If both curves fit the circle well (within 5 pixels), connect them
+                                if max_error_i < 5 and max_error_j < 5:
+                                    # Get endpoints of both curves
+                                    pi_start, pi_end = curve_i['points'][0], curve_i['points'][-1]
+                                    pj_start, pj_end = curve_j['points'][0], curve_j['points'][-1]
 
-                            # Extend curve j to meeting point
-                            if ej_idx == 0:  # Start of curve j
-                                detected_curves[j]['points'] = np.vstack([meeting_point, detected_curves[j]['points']])
-                            else:  # End of curve j
-                                detected_curves[j]['points'] = np.vstack([detected_curves[j]['points'], meeting_point])
+                                    # Find which endpoints are closest (these should be connected)
+                                    dists = [
+                                        (0, 0, np.linalg.norm(pi_start - pj_start)),
+                                        (0, 1, np.linalg.norm(pi_start - pj_end)),
+                                        (1, 0, np.linalg.norm(pi_end - pj_start)),
+                                        (1, 1, np.linalg.norm(pi_end - pj_end))
+                                    ]
+                                    ei_idx, ej_idx, min_dist = min(dists, key=lambda x: x[2])
+
+                                    # Only connect if endpoints are reasonably far apart (through watermark)
+                                    if 20 < min_dist < 60:
+                                        # Determine which endpoints to connect
+                                        pi = pi_start if ei_idx == 0 else pi_end
+                                        pj = pj_start if ej_idx == 0 else pj_end
+
+                                        # Calculate angles for arc interpolation
+                                        angle_i = np.arctan2(pi[1] - cy, pi[0] - cx)
+                                        angle_j = np.arctan2(pj[1] - cy, pj[0] - cx)
+
+                                        # Generate points along the circle arc between the two endpoints
+                                        # Choose the shorter arc direction
+                                        angle_diff = angle_j - angle_i
+                                        if angle_diff > np.pi:
+                                            angle_diff -= 2 * np.pi
+                                        elif angle_diff < -np.pi:
+                                            angle_diff += 2 * np.pi
+
+                                        # Generate 20 interpolation points
+                                        angles = np.linspace(angle_i, angle_i + angle_diff, 20)
+                                        arc_points = np.column_stack([
+                                            cx + r * np.cos(angles),
+                                            cy + r * np.sin(angles)
+                                        ])
+
+                                        # Connect the curves by inserting the arc
+                                        if ei_idx == 0:  # Start of curve i
+                                            detected_curves[i]['points'] = np.vstack([arc_points[::-1], detected_curves[i]['points']])
+                                        else:  # End of curve i
+                                            detected_curves[i]['points'] = np.vstack([detected_curves[i]['points'], arc_points])
+
+                                        if ej_idx == 0:  # Start of curve j
+                                            detected_curves[j]['points'] = np.vstack([arc_points[::-1], detected_curves[j]['points']])
+                                        else:  # End of curve j
+                                            detected_curves[j]['points'] = np.vstack([detected_curves[j]['points'], arc_points])
 
                 except Exception as e:
-                    print(f"WARNING: Curve extension failed: {e}")
+                    print(f"WARNING: Curve connection failed: {e}")
 
             return {
                 'lines': trimmed_lines,
