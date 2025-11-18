@@ -954,13 +954,8 @@ def create_partitions(watermark_mask, lines, curves):
             ix, iy = int(round(x)), int(round(y))
             if 0 <= ix < w and 0 <= iy < h:
                 barrier_map[iy, ix] = True
-                # Make barriers 3x3 for proper separation
-                # We'll handle small isolated corner groups by merging tiny partitions later
-                for di in [-1, 0, 1]:
-                    for dj in [-1, 0, 1]:
-                        ni, nj = iy + di, ix + dj
-                        if 0 <= ni < h and 0 <= nj < w:
-                            barrier_map[ni, nj] = True
+                # Keep barriers thin (1 pixel) to allow narrow regions between
+                # parallel lines to form their own partitions (e.g., black borders)
 
     # Add curve barriers
     for curve in curves:
@@ -969,12 +964,7 @@ def create_partitions(watermark_mask, lines, curves):
             ix, iy = int(round(x)), int(round(y))
             if 0 <= ix < w and 0 <= iy < h:
                 barrier_map[iy, ix] = True
-                # Make it 2-pixels thick for better separation
-                for di in [-1, 0, 1]:
-                    for dj in [-1, 0, 1]:
-                        ni, nj = iy + di, ix + dj
-                        if 0 <= ni < h and 0 <= nj < w:
-                            barrier_map[ni, nj] = True
+                # Keep barriers thin (1 pixel) like lines
 
     # Create regions: watermark pixels that are NOT barriers
     connectable_region = watermark_mask & (~barrier_map)
@@ -1254,6 +1244,12 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15, full
     if merged_count > 0:
         print(f'After merging {merged_count} segments with identical colors: {len(segment_info)} segments')
 
+    # Calculate similarity threshold for merging
+    if color_std is not None:
+        similarity_threshold = max(15, min(20, int(color_std * 0.6)))
+    else:
+        similarity_threshold = 18
+
     # Merge small segments into largest segment in same partition
     # Small segments are often artifacts and can't reliably sample boundary colors
     merged_count = 0
@@ -1264,16 +1260,25 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15, full
         if len(partition_segments) > 1:
             largest_seg = max(partition_segments, key=lambda s: s['size'])
 
-            # Merge small segments (< 30px) into largest
+            # Merge small segments (< 30px) into largest, but only if colors are similar
             for seg in partition_segments:
                 if seg['size'] < 30 and seg != largest_seg and seg in segment_info:
-                    # Merge into largest
-                    largest_seg['mask'] = largest_seg['mask'] | seg['mask']
-                    largest_seg['size'] += seg['size']
-                    segments[seg['mask']] = largest_seg['id']
-                    segment_info.remove(seg)
-                    merged_count += 1
-                    print(f'  Merged small segment {seg["id"]} ({seg["size"]}px) into largest segment {largest_seg["id"]} in partition {partition_id}')
+                    # Check color similarity before merging
+                    seg_pixels = corner[seg['mask']]
+                    largest_pixels = corner[largest_seg['mask']]
+                    seg_median = np.median(seg_pixels, axis=0)
+                    largest_median = np.median(largest_pixels, axis=0)
+                    color_diff = np.linalg.norm(seg_median - largest_median)
+
+                    # Only merge if colors are similar (within dynamic threshold)
+                    if color_diff < similarity_threshold:
+                        # Merge into largest
+                        largest_seg['mask'] = largest_seg['mask'] | seg['mask']
+                        largest_seg['size'] += seg['size']
+                        segments[seg['mask']] = largest_seg['id']
+                        segment_info.remove(seg)
+                        merged_count += 1
+                        print(f'  Merged small segment {seg["id"]} ({seg["size"]}px) into largest segment {largest_seg["id"]} in partition {partition_id}')
 
             # Recalculate centroid
             if merged_count > 0:
@@ -1282,13 +1287,11 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15, full
     if merged_count > 0:
         print(f'After merging small segments into largest per partition: {len(segment_info)} segments')
 
-    # Merge similar adjacent segments WITHIN each partition
+    # Calculate span threshold for merging similar adjacent segments
     if color_std is not None:
-        similarity_threshold = max(15, min(20, int(color_std * 0.6)))
         span_threshold = max(20, min(25, int(color_std * 0.75)))
         print(f'Dynamic merge thresholds: similarity={similarity_threshold}, span={span_threshold} (std={color_std:.1f})')
     else:
-        similarity_threshold = 18
         span_threshold = 23
 
     merged_count = 0
