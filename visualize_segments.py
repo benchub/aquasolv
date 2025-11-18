@@ -126,6 +126,21 @@ for info in segment_info:
         # Using all pixels gives a much more robust median than cherry-picking a few
         sample_colors = boundary_colors
 
+        # Release contested points if we have enough uncontested ones
+        # This allows segments with few boundary options to use the contested points
+        uncontested_mask = (boundary_contention == 1)
+        num_uncontested = np.sum(uncontested_mask)
+        num_contested = np.sum(~uncontested_mask)
+
+        # If we have at least 20 uncontested pixels, release all contested ones
+        if num_uncontested >= 20:
+            boundary_colors = boundary_colors[uncontested_mask]
+            boundary_contention = boundary_contention[uncontested_mask]
+            boundary_coords = boundary_coords[uncontested_mask]
+            sample_colors = boundary_colors
+            if num_contested > 0:
+                print(f"    Segment {seg_id}: Released {num_contested} contested pixels (have {num_uncontested} uncontested)")
+
         # Apply contention-aware outlier filtering
         sample_colors, boundary_contention, mask = apply_contention_aware_outlier_filtering(
             boundary_colors, boundary_contention, seg_id
@@ -162,6 +177,19 @@ for info in segment_info:
             if np.sum(boundary_contact) > 0:
                 boundary_coords = np.argwhere(boundary_contact)
                 boundary_colors = corner[boundary_contact]
+
+                # Check contention and release contested pixels if we have enough uncontested ones
+                boundary_contention = boundary_segment_count[boundary_contact]
+                uncontested_mask = (boundary_contention == 1)
+                num_uncontested = np.sum(uncontested_mask)
+                num_contested = np.sum(~uncontested_mask)
+
+                # If we have at least 10 uncontested pixels (lower threshold for interior), release contested ones
+                if num_uncontested >= 10:
+                    boundary_colors = boundary_colors[uncontested_mask]
+                    boundary_coords = boundary_coords[uncontested_mask]
+                    if num_contested > 0:
+                        print(f"    Segment {seg_id} (interior): Released {num_contested} contested pixels (have {num_uncontested} uncontested)")
 
                 # Sample ALL reachable boundary pixels
                 sample_coords = boundary_coords
