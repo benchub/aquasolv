@@ -317,9 +317,17 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                         r = np.sqrt(c[2] + cx**2 + cy**2)
                         return cx, cy, r
 
+                    # Track which curves have been merged
+                    curves_to_remove = set()
+
                     # Check each pair of curves to see if they're arcs of the same circle
                     for i in range(len(detected_curves)):
+                        if i in curves_to_remove:
+                            continue
                         for j in range(i + 1, len(detected_curves)):
+                            if j in curves_to_remove:
+                                continue
+
                             curve_i = detected_curves[i]
                             curve_j = detected_curves[j]
 
@@ -377,16 +385,29 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                                             cy + r * np.sin(angles)
                                         ])
 
-                                        # Connect the curves by inserting the arc
-                                        if ei_idx == 0:  # Start of curve i
-                                            detected_curves[i]['points'] = np.vstack([arc_points[::-1], detected_curves[i]['points']])
-                                        else:  # End of curve i
-                                            detected_curves[i]['points'] = np.vstack([detected_curves[i]['points'], arc_points])
+                                        # Merge the curves into one by connecting: curve_i + arc + curve_j
+                                        # Order them properly based on which endpoints connect
+                                        if ei_idx == 0 and ej_idx == 0:
+                                            # Both starts connect: reverse i, arc, j
+                                            merged_points = np.vstack([curve_i['points'][::-1], arc_points, curve_j['points']])
+                                        elif ei_idx == 0 and ej_idx == 1:
+                                            # i start to j end: reverse i, arc, reverse j
+                                            merged_points = np.vstack([curve_i['points'][::-1], arc_points, curve_j['points'][::-1]])
+                                        elif ei_idx == 1 and ej_idx == 0:
+                                            # i end to j start: i, arc, j
+                                            merged_points = np.vstack([curve_i['points'], arc_points, curve_j['points']])
+                                        else:  # ei_idx == 1 and ej_idx == 1
+                                            # Both ends connect: i, arc, reverse j
+                                            merged_points = np.vstack([curve_i['points'], arc_points, curve_j['points'][::-1]])
 
-                                        if ej_idx == 0:  # Start of curve j
-                                            detected_curves[j]['points'] = np.vstack([arc_points[::-1], detected_curves[j]['points']])
-                                        else:  # End of curve j
-                                            detected_curves[j]['points'] = np.vstack([detected_curves[j]['points'], arc_points])
+                                        # Update curve i with merged points
+                                        detected_curves[i]['points'] = merged_points
+
+                                        # Mark curve j for removal (it's now part of curve i)
+                                        curves_to_remove.add(j)
+
+                    # Remove merged curves
+                    detected_curves = [curve for idx, curve in enumerate(detected_curves) if idx not in curves_to_remove]
 
                 except Exception as e:
                     print(f"WARNING: Curve connection failed: {e}")
