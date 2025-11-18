@@ -113,18 +113,24 @@ def apply_contention_aware_outlier_filtering(boundary_colors, boundary_contentio
                 contention_ratio = dark_contention / bright_contention if bright_contention > 0 else 0
                 less_contested = "dark"
 
-            # FRAME/BORDER DETECTION: If one cluster is very dark (lum < 50), it's likely a frame border
-            # Prefer dark borders even if they're smaller
-            # For small samples (<20 pixels), require at least 3 dark pixels
+            # FRAME/BORDER DETECTION: If one cluster is at extreme luminance (very dark or very bright),
+            # it's likely a frame border. Prefer extreme clusters even if they're smaller.
+            # For small samples (<20 pixels), require at least 3 extreme pixels
             # For larger samples, require at least 15% to avoid false positives
-            dark_mean_lum = np.mean(luminances[dark_mask]) if dark_count > 0 else 255
-            bright_mean_lum = np.mean(luminances[bright_mask]) if bright_count > 0 else 255
+            dark_mean_lum = np.mean(luminances[dark_mask]) if dark_count > 0 else 128
+            bright_mean_lum = np.mean(luminances[bright_mask]) if bright_count > 0 else 128
 
-            min_dark_pixels = 3 if len(boundary_colors) < 20 else max(3, int(len(boundary_colors) * 0.15))
-            if dark_mean_lum < 50 and dark_count >= min_dark_pixels:
-                # Dark cluster is very dark (likely border) with sufficient representation
+            min_extreme_pixels = 3 if len(boundary_colors) < 20 else max(3, int(len(boundary_colors) * 0.15))
+
+            # Check for dark borders (black frames)
+            if dark_mean_lum < 50 and dark_count >= min_extreme_pixels:
                 print(f"    Segment {segment_id}: Filtered out {bright_count} bright outliers (dark border/frame detected, gap={max_gap:.0f})")
                 return boundary_colors[dark_mask], boundary_contention[dark_mask], dark_mask
+
+            # Check for bright borders (white frames)
+            if bright_mean_lum > 200 and bright_count >= min_extreme_pixels:
+                print(f"    Segment {segment_id}: Filtered out {dark_count} dark outliers (bright border/frame detected, gap={max_gap:.0f})")
+                return boundary_colors[bright_mask], boundary_contention[bright_mask], bright_mask
 
             # Only use contention to decide if one cluster is SIGNIFICANTLY less contested (ratio < 0.7)
             # AND the size difference isn't too extreme (ratio > 0.5, meaning smaller is at least 50% of larger)
@@ -706,8 +712,8 @@ def segmented_inpaint_watermark(img_array, template_mask):
 
             if len(boundary_colors) > 0:
                 # Apply contention-aware outlier filtering
-                # IMPORTANT: When fallback was used (sampling from barriers), prefer DARKER cluster
-                # since barriers are typically darker than backgrounds
+                # IMPORTANT: When fallback was used (sampling from barriers), prefer more EXTREME cluster
+                # Barriers can be either very dark (black frames) or very bright (white frames)
                 if used_fallback and len(boundary_colors) >= 4:
                     # When sampling from barriers after fallback, check for two clusters
                     luminance = np.mean(boundary_colors, axis=1)
@@ -715,18 +721,23 @@ def segmented_inpaint_watermark(img_array, template_mask):
                     gaps = np.diff(sorted_lum)
 
                     if len(gaps) > 0 and np.max(gaps) > 50:
-                        # Two distinct clusters - keep the DARKER one (barriers are dark)
+                        # Two distinct clusters - keep the more EXTREME one (further from mid-gray)
                         large_gap_idx = np.where(gaps > 50)[0][0] + 1
                         cluster1 = sorted_lum[:large_gap_idx]
                         cluster2 = sorted_lum[large_gap_idx:]
-                        # Choose darker cluster (lower luminance)
-                        darker_cluster = cluster1 if np.mean(cluster1) < np.mean(cluster2) else cluster2
-                        selected_cluster_mean = np.mean(darker_cluster)
-                        threshold = np.std(darker_cluster) * 2 if len(darker_cluster) > 1 else 20
+                        # Choose cluster that's more extreme (further from 128)
+                        cluster1_mean = np.mean(cluster1)
+                        cluster2_mean = np.mean(cluster2)
+                        cluster1_extremeness = abs(cluster1_mean - 128)
+                        cluster2_extremeness = abs(cluster2_mean - 128)
+                        extreme_cluster = cluster1 if cluster1_extremeness > cluster2_extremeness else cluster2
+                        selected_cluster_mean = np.mean(extreme_cluster)
+                        threshold = np.std(extreme_cluster) * 2 if len(extreme_cluster) > 1 else 20
                         mask = np.abs(luminance - selected_cluster_mean) <= threshold
                         boundary_colors = boundary_colors[mask]
                         boundary_contention = boundary_contention[mask]
-                        print(f"    Segment {segment_id}: Fallback outlier filter selected darker cluster ({len(boundary_colors)} pixels)")
+                        cluster_type = "darker" if selected_cluster_mean < 128 else "brighter"
+                        print(f"    Segment {segment_id}: Fallback outlier filter selected {cluster_type} extreme cluster ({len(boundary_colors)} pixels)")
                 else:
                     # Normal outlier filtering
                     boundary_colors, boundary_contention, _ = apply_contention_aware_outlier_filtering(
