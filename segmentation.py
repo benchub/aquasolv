@@ -1049,6 +1049,106 @@ def create_partitions(watermark_mask, lines, curves):
     return partition_map
 
 
+def split_partitions_by_background(partition_map, corner, watermark_mask):
+    """
+    Split partitions that span multiple distinct background regions.
+
+    A partition that extends into both cyan and yellow backgrounds should be split
+    so each segment only samples from its actual neighboring background.
+
+    Args:
+        partition_map: Integer array with partition IDs
+        corner: RGB image for color analysis
+        watermark_mask: Boolean mask of watermark pixels
+
+    Returns:
+        Updated partition_map with split partitions
+    """
+    from sklearn.cluster import KMeans
+
+    h, w = partition_map.shape
+    num_partitions = partition_map.max() + 1 if partition_map.max() >= 0 else 0
+
+    if num_partitions == 0:
+        return partition_map
+
+    # Compute boundary region (pixels just outside watermark)
+    dilated_watermark = binary_dilation(watermark_mask, iterations=15)
+    boundary_region = dilated_watermark & ~watermark_mask
+
+    next_partition_id = num_partitions
+
+    for partition_id in range(num_partitions):
+        # Get boundary pixels touched by this partition
+        partition_mask = (partition_map == partition_id)
+
+        # Only consider watermark pixels in this partition (not boundary extension)
+        partition_watermark = partition_mask & watermark_mask
+
+        if not np.any(partition_watermark):
+            continue
+
+        # Dilate to reach boundary
+        dilated_partition = binary_dilation(partition_watermark, iterations=20)
+        boundary_contact = dilated_partition & boundary_region
+
+        if np.sum(boundary_contact) < 20:  # Need enough boundary pixels
+            continue
+
+        boundary_colors = corner[boundary_contact]
+
+        # Cluster boundary colors into 2 groups
+        kmeans = KMeans(n_clusters=2, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(boundary_colors)
+        centers = kmeans.cluster_centers_
+
+        # Check if clusters are distinct (color distance between centers)
+        color_distance = np.linalg.norm(centers[0] - centers[1])
+
+        # Only split if clusters are very distinct (large color gap)
+        if color_distance < 80:  # Threshold for "distinct" backgrounds
+            continue
+
+        # Count pixels in each cluster
+        cluster_sizes = [np.sum(labels == 0), np.sum(labels == 1)]
+
+        # Only split if both clusters are substantial (not just a few outliers)
+        min_cluster_size = min(cluster_sizes)
+        if min_cluster_size < 5:  # Too few pixels in one cluster
+            continue
+
+        print(f'  Splitting partition {partition_id}: boundary spans 2 regions (color_dist={color_distance:.0f}, sizes={cluster_sizes})')
+
+        # Now split the partition: assign watermark pixels to sub-partitions
+        # based on which cluster center they're geometrically closer to
+
+        # Get boundary pixel coordinates for each cluster
+        boundary_coords = np.argwhere(boundary_contact)
+        cluster0_coords = boundary_coords[labels == 0]
+        cluster1_coords = boundary_coords[labels == 1]
+
+        # For each watermark pixel in this partition, find closest boundary cluster
+        watermark_pixels = np.argwhere(partition_watermark)
+
+        from scipy.spatial import cKDTree
+        tree0 = cKDTree(cluster0_coords)
+        tree1 = cKDTree(cluster1_coords)
+
+        for py, px in watermark_pixels:
+            dist0, _ = tree0.query([py, px])
+            dist1, _ = tree1.query([py, px])
+
+            # Assign to sub-partition based on closer boundary cluster
+            if dist1 < dist0:
+                # Closer to cluster 1 - assign to new sub-partition
+                partition_map[py, px] = next_partition_id
+
+        # Update partition ID counter for next split
+        next_partition_id += 1
+
+    return partition_map
+
+
 def find_segments(corner, template, quantization=None, core_threshold=0.15, full_image=None):
     """
     Find color segments in the watermark region using geometric-feature-based partitioning.
@@ -1119,6 +1219,10 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15, full
     num_partitions = np.max(partition_map) + 1 if np.any(partition_map >= 0) else 0
 
     print(f'Created {num_partitions} partitions based on geometric features')
+
+    # SPLIT PARTITIONS that span multiple distinct background regions
+    partition_map = split_partitions_by_background(partition_map, corner, watermark_mask)
+    num_partitions = np.max(partition_map) + 1 if np.any(partition_map >= 0) else 0
 
     # Quantize colors
     color_map = (corner // quantization) * quantization
