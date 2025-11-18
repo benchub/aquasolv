@@ -246,14 +246,15 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                 # Dilate watermark mask to exclude boundary edges
                 dilated_watermark = binary_dilation(watermark_mask, iterations=2)
 
-                # Detect contours from full edges (not just background) to catch curves
-                # that go through the watermark
-                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                # Detect initial curves from background edges only (not watermark boundary)
+                edges_background = edges.copy()
+                edges_background[dilated_watermark] = 0
+                contours, _ = cv2.findContours(edges_background, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
                 for contour in contours:
                     arc_length = cv2.arcLength(contour, False)
-                    # Lower threshold to catch curve segments split by watermark
-                    if arc_length < 25:
+                    # Lower threshold to catch short curve segments split by watermark
+                    if arc_length < 15:
                         continue
 
                     epsilon = 0.5
@@ -265,25 +266,24 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                         chord_length = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
 
                         curvature_ratio = arc_length / (chord_length + 0.1)
-                        if curvature_ratio > 1.3:
+                        # Relax curvature for short segments (might be part of larger curve)
+                        min_curvature = 1.2 if arc_length < 30 else 1.3
+
+                        if curvature_ratio > min_curvature:
                             points = approx.reshape(-1, 2).astype(float)
 
+                            # Check span - curves can be long and narrow (e.g. boundary curves)
+                            # so check if at least ONE dimension spans well
                             x_span = np.max(points[:, 0]) - np.min(points[:, 0])
                             y_span = np.max(points[:, 1]) - np.min(points[:, 1])
-                            if x_span < 30 and y_span < 30:
-                                continue
+                            max_span = max(x_span, y_span)
 
-                            # Verify curve has points in background (not entirely in watermark)
-                            points_in_background = 0
-                            for pt in points:
-                                px, py = int(pt[0]), int(pt[1])
-                                if 0 <= px < 100 and 0 <= py < 100:
-                                    if not dilated_watermark[py, px]:
-                                        points_in_background += 1
-
-                            # Require at least 20% of points in background
-                            if points_in_background < len(points) * 0.2:
-                                continue
+                            if arc_length < 30:  # Short segment, might be split
+                                if max_span < 10:  # Must span at least 10px in some direction
+                                    continue
+                            else:  # Longer curves should span more in at least one direction
+                                if max_span < 20:  # Must span at least 20px in some direction
+                                    continue
 
                             detected_curves.append({
                                 'points': points,
