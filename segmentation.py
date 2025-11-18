@@ -11,42 +11,300 @@ from scipy.ndimage import label as connected_components_label, binary_dilation
 import cv2
 
 
-def detect_geometric_features(corner, watermark_mask):
+def detect_geometric_features(corner, watermark_mask, full_image=None):
     """
-    Detect geometric features (lines) in the background region.
+    Detect geometric features (lines) that pass through the watermark region.
+
+    Strategy: Detect strong structural lines from the full image (if provided) that
+    span >50% of image dimensions, then check which pass through the watermark area.
+    This avoids false positives from content edges.
 
     Args:
-        corner: 100x100x3 RGB image array
-        watermark_mask: boolean mask indicating watermark pixels
+        corner: 100x100x3 RGB image array (bottom-right corner)
+        watermark_mask: boolean mask indicating watermark pixels in corner
+        full_image: Optional full image array for better line detection
 
     Returns:
-        List of line segments as ((x1, y1), (x2, y2)) tuples, or None if detection fails
+        Dict with 'lines' and 'curves', or None if detection fails
     """
     try:
-        # Apply Canny edge detection on each RGB channel to catch color boundaries
-        # that have similar grayscale values but different RGB values
+        # If we have the full image, detect lines from it
+        if full_image is not None:
+            img_h, img_w = full_image.shape[:2]
+
+            # Edge detection on full image
+            edges_r = cv2.Canny(full_image[:, :, 0].astype(np.uint8), 30, 100)
+            edges_g = cv2.Canny(full_image[:, :, 1].astype(np.uint8), 30, 100)
+            edges_b = cv2.Canny(full_image[:, :, 2].astype(np.uint8), 30, 100)
+            edges = np.maximum(np.maximum(edges_r, edges_g), edges_b)
+
+            # Detect lines - require them to be reasonably long structural lines
+            # Lower minLineLength to catch shorter but strong borders
+            lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=40,
+                                    minLineLength=min(img_w, img_h) // 5, maxLineGap=30)
+
+            if lines is None or len(lines) == 0:
+                return None
+
+            # Filter lines: must span >50% of image and pass through watermark region
+            # Watermark region is bottom-right 100x100
+            filtered_lines = []
+            corner_x_start = img_w - 100
+            corner_y_start = img_h - 100
+
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+
+                # Calculate span
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+
+                # Must be axis-aligned
+                is_horizontal = dx > dy
+                is_vertical = dy > dx
+                if not (is_horizontal or is_vertical):
+                    continue
+
+                # Must span >40% of relevant dimension (relaxed to catch shorter borders)
+                if is_horizontal and dx < img_w * 0.4:
+                    continue
+                if is_vertical and dy < img_h * 0.4:
+                    continue
+
+                # Check if line passes through watermark corner region
+                # Extend line and check if it intersects the corner region
+                passes_through = False
+
+                if is_horizontal:
+                    # Check if y coordinate is in corner region and x spans into it
+                    y_avg = (y1 + y2) / 2
+                    if corner_y_start <= y_avg < img_h:
+                        x_min, x_max = min(x1, x2), max(x1, x2)
+                        if x_max >= corner_x_start:
+                            passes_through = True
+
+                if is_vertical:
+                    # Check if x coordinate is in corner region and y spans into it
+                    x_avg = (x1 + x2) / 2
+                    if corner_x_start <= x_avg < img_w:
+                        y_min, y_max = min(y1, y2), max(y1, y2)
+                        if y_max >= corner_y_start:
+                            passes_through = True
+
+                if passes_through:
+                    # Convert to corner coordinates
+                    x1_corner = x1 - corner_x_start
+                    y1_corner = y1 - corner_y_start
+                    x2_corner = x2 - corner_x_start
+                    y2_corner = y2 - corner_y_start
+                    filtered_lines.append(((x1_corner, y1_corner), (x2_corner, y2_corner)))
+
+            if len(filtered_lines) == 0:
+                return None
+
+            # Extend lines to corner boundaries (0-99) and trim at intersections
+            extended_lines = []
+            for (x1, y1), (x2, y2) in filtered_lines:
+                dx = x2 - x1
+                dy = y2 - y1
+
+                t_values = []
+                # Find intersections with corner boundaries (0 to 99)
+                if dx != 0:
+                    t = -x1 / dx
+                    y_at_x0 = y1 + t * dy
+                    if 0 <= y_at_x0 <= 99:
+                        t_values.append((t, 0, y_at_x0))
+
+                    t = (99 - x1) / dx
+                    y_at_x99 = y1 + t * dy
+                    if 0 <= y_at_x99 <= 99:
+                        t_values.append((t, 99, y_at_x99))
+
+                if dy != 0:
+                    t = -y1 / dy
+                    x_at_y0 = x1 + t * dx
+                    if 0 <= x_at_y0 <= 99:
+                        t_values.append((t, x_at_y0, 0))
+
+                    t = (99 - y1) / dy
+                    x_at_y99 = x1 + t * dx
+                    if 0 <= x_at_y99 <= 99:
+                        t_values.append((t, x_at_y99, 99))
+
+                if len(t_values) >= 2:
+                    t_values.sort(key=lambda v: v[0])
+                    _, ext_x1, ext_y1 = t_values[0]
+                    _, ext_x2, ext_y2 = t_values[-1]
+                    extended_lines.append(((ext_x1, ext_y1), (ext_x2, ext_y2)))
+
+            # Trim lines to stop at their first intersection from each endpoint
+            def line_intersection(line1, line2):
+                """Find intersection point of two lines with parametric t value."""
+                (x1, y1), (x2, y2) = line1
+                (x3, y3), (x4, y4) = line2
+
+                denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+                if abs(denom) < 1e-10:
+                    return None
+
+                t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+                u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
+
+                # Consider intersections along the line segments
+                # Allow intersections near endpoints (within the segment)
+                if 0 <= t <= 1 and 0 <= u <= 1:
+                    ix = x1 + t * (x2 - x1)
+                    iy = y1 + t * (y2 - y1)
+                    return (t, (ix, iy))
+                return None
+
+            # Separate and sort lines for proper pairing
+            # Vertical lines (sorted by x-coordinate)
+            # Horizontal lines (sorted by y-coordinate)
+            vertical_lines = []
+            horizontal_lines = []
+
+            for line in extended_lines:
+                (x1, y1), (x2, y2) = line
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+
+                if dy > dx:  # Vertical
+                    x_avg = (x1 + x2) / 2
+                    vertical_lines.append((x_avg, line))
+                elif dx > dy:  # Horizontal
+                    y_avg = (y1 + y2) / 2
+                    horizontal_lines.append((y_avg, line))
+
+            # Sort: vertical by x (left to right), horizontal by y (top to bottom)
+            vertical_lines.sort(key=lambda t: t[0])
+            horizontal_lines.sort(key=lambda t: t[0])
+
+            # Pair them up: leftmost vertical with topmost horizontal, etc.
+            # Each vertical line should meet its corresponding horizontal line
+            trimmed_lines = []
+
+            # Create lookup for paired lines
+            v_to_h_pairing = {}  # Maps vertical line index to horizontal line index
+            h_to_v_pairing = {}  # Maps horizontal line index to vertical line index
+
+            if len(vertical_lines) == len(horizontal_lines):
+                for i in range(len(vertical_lines)):
+                    v_to_h_pairing[i] = i
+                    h_to_v_pairing[i] = i
+
+            # Trim vertical lines to meet their paired horizontal lines
+            for v_idx, (v_x, v_line) in enumerate(vertical_lines):
+                (x1, y1), (x2, y2) = v_line
+                # Keep the endpoint with smaller y (from top boundary)
+                boundary_y = min(y1, y2)
+                boundary_x = x1 if y1 < y2 else x2
+
+                # Find the paired horizontal line
+                if v_idx in v_to_h_pairing:
+                    h_idx = v_to_h_pairing[v_idx]
+                    h_y, _ = horizontal_lines[h_idx]
+                    trimmed_lines.append(((boundary_x, boundary_y), (boundary_x, h_y)))
+                else:
+                    # No pairing, keep full length
+                    trimmed_lines.append(v_line)
+
+            # Trim horizontal lines to meet their paired vertical lines
+            for h_idx, (h_y, h_line) in enumerate(horizontal_lines):
+                (x1, y1), (x2, y2) = h_line
+                # Keep the endpoint with smaller x (from left boundary)
+                boundary_x = min(x1, x2)
+                boundary_y = y1 if x1 < x2 else y2
+
+                # Find the paired vertical line
+                if h_idx in h_to_v_pairing:
+                    v_idx = h_to_v_pairing[h_idx]
+                    v_x, _ = vertical_lines[v_idx]
+                    trimmed_lines.append(((boundary_x, boundary_y), (v_x, boundary_y)))
+                else:
+                    # No pairing, keep full length
+                    trimmed_lines.append(h_line)
+
+            # Debug: print final trimmed lines
+            print(f"  Final trimmed lines:")
+            for i, ((x1, y1), (x2, y2)) in enumerate(trimmed_lines):
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+                orientation = 'V' if dy > dx else 'H'
+                print(f"    L{i} [{orientation}]: ({x1:.1f},{y1:.1f}) -> ({x2:.1f},{y2:.1f})")
+
+            # No curve detection needed when using full image approach
+            return {
+                'lines': trimmed_lines,
+                'curves': []
+            }
+
+        # Fallback: detect from corner only (old approach)
+        # Apply Canny edge detection on each RGB channel
         edges_r = cv2.Canny(corner[:, :, 0].astype(np.uint8), 20, 80)
         edges_g = cv2.Canny(corner[:, :, 1].astype(np.uint8), 20, 80)
         edges_b = cv2.Canny(corner[:, :, 2].astype(np.uint8), 20, 80)
-
-        # Combine edges from all channels
         edges = np.maximum(np.maximum(edges_r, edges_g), edges_b)
 
-        # Dilate watermark mask slightly to also mask edges at the watermark boundary
-        # This prevents detecting the watermark diamond edge as a background feature
         dilated_watermark = binary_dilation(watermark_mask, iterations=2)
 
-        # Mask to only detect edges in background (not inside or at boundary of watermark)
-        edges_background = edges.copy()
-        edges_background[dilated_watermark] = 0
-
-        # Detect lines using Hough transform
-        # Lowered thresholds to catch fainter/shorter lines
-        lines = cv2.HoughLinesP(edges_background, rho=1, theta=np.pi/180, threshold=15,
-                                minLineLength=10, maxLineGap=20)
+        lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=20,
+                                minLineLength=25, maxLineGap=25)
 
         if lines is None or len(lines) == 0:
             return None
+
+        # Filter lines: must be axis-aligned and have edge support outside watermark
+        filtered_lines = []
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+
+            # Calculate line properties
+            dx = abs(x2 - x1)
+            dy = abs(y2 - y1)
+            length = np.sqrt(dx**2 + dy**2)
+
+            # Must be axis-aligned
+            is_horizontal = dx > dy
+            is_vertical = dy > dx
+            if not (is_horizontal or is_vertical):
+                continue
+
+            # Check angle tolerance
+            if is_horizontal:
+                angle = np.arctan2(dy, dx) * 180 / np.pi
+                if angle > 5:
+                    continue
+            if is_vertical:
+                angle = np.arctan2(dx, dy) * 180 / np.pi
+                if angle > 5:
+                    continue
+
+            # Verify line has edge support in BACKGROUND (not just in watermark)
+            # Sample points along the line and check if edges exist outside watermark
+            num_samples = int(length)
+            background_edge_count = 0
+            for i in range(num_samples):
+                t = i / max(num_samples - 1, 1)
+                px = int(x1 + t * (x2 - x1))
+                py = int(y1 + t * (y2 - y1))
+                if 0 <= px < 100 and 0 <= py < 100:
+                    # Check if this point is outside watermark AND has an edge
+                    if not dilated_watermark[py, px] and edges[py, px] > 0:
+                        background_edge_count += 1
+
+            # Require at least 20% of line length to be supported by background edges
+            # (Structural lines passing through watermark may have less visible support)
+            if background_edge_count < length * 0.2:
+                continue
+
+            filtered_lines.append(line)
+
+        if len(filtered_lines) == 0:
+            return None
+
+        lines = np.array(filtered_lines)
 
         # Extend lines to image boundaries and handle intersections
         extended_lines = []
@@ -99,7 +357,7 @@ def detect_geometric_features(corner, watermark_mask):
 
         # Merge nearly-parallel lines that are very close together
         # This prevents duplicate detection of the same line as multiple segments
-        def lines_are_similar(line1, line2, angle_threshold=3.0, distance_threshold=2.0):
+        def lines_are_similar(line1, line2, angle_threshold=3.0, distance_threshold=5.0):
             """Check if two lines are nearly parallel and close together."""
             (x1, y1), (x2, y2) = line1
             (x3, y3), (x4, y4) = line2
@@ -331,35 +589,46 @@ def detect_geometric_features(corner, watermark_mask):
             trimmed_lines.append((source, target))
 
         # Detect curves in background using contours
+        # Apply strict filtering to only detect structural curves, not content edges
         detected_curves = []
         try:
+            # Find contours from background edges (outside watermark)
+            edges_background = edges.copy()
+            edges_background[dilated_watermark] = 0
+
             contours, _ = cv2.findContours(edges_background, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
             for contour in contours:
                 # Filter for significant curves
                 arc_length = cv2.arcLength(contour, False)
 
-                # Only consider contours with significant length
-                if arc_length < 30:  # At least 30 pixels long
+                # Must be long enough to be structural (at least 40 pixels)
+                if arc_length < 40:
                     continue
 
                 # Simplify contour slightly to remove noise
-                epsilon = 0.5  # Small epsilon to preserve curve shape
+                epsilon = 0.5
                 approx = cv2.approxPolyDP(contour, epsilon, False)
 
                 # Check if this is actually curved (not just a straight line)
-                # by comparing arc length to chord length
                 if len(approx) >= 3:
-                    # Get start and end points
                     start = approx[0][0]
                     end = approx[-1][0]
                     chord_length = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
 
-                    # If arc length is significantly longer than chord, it's curved
-                    curvature_ratio = arc_length / (chord_length + 0.1)  # Avoid division by zero
-                    if curvature_ratio > 1.1:  # At least 10% longer than straight line
-                        # Store the curve as a list of points
+                    # Must be significantly curved (arc at least 30% longer than chord)
+                    curvature_ratio = arc_length / (chord_length + 0.1)
+                    if curvature_ratio > 1.3:
+                        # Verify this is a smooth curve, not a jagged content edge
+                        # Check that the curve has consistent curvature
                         points = approx.reshape(-1, 2).astype(float)
+
+                        # Only accept curves that span a significant portion of the image
+                        x_span = np.max(points[:, 0]) - np.min(points[:, 0])
+                        y_span = np.max(points[:, 1]) - np.min(points[:, 1])
+                        if x_span < 30 and y_span < 30:
+                            continue
+
                         detected_curves.append({
                             'points': points,
                             'length': arc_length,
@@ -368,262 +637,6 @@ def detect_geometric_features(corner, watermark_mask):
 
         except Exception as e:
             print(f"WARNING: Curve detection failed: {e}")
-
-        # Function to fit circle to a set of points using algebraic fit
-        def fit_circle_to_points(points):
-            """Fit a circle to a set of 2D points. Returns (cx, cy, radius) or None if fit fails."""
-            if len(points) < 3:
-                return None
-
-            # Use algebraic circle fit: x^2 + y^2 + D*x + E*y + F = 0
-            # Center: (-D/2, -E/2), Radius: sqrt(D^2/4 + E^2/4 - F)
-            x = points[:, 0]
-            y = points[:, 1]
-
-            # Build the design matrix
-            A = np.column_stack([x, y, np.ones(len(points))])
-            b = -(x**2 + y**2)
-
-            try:
-                # Solve least squares
-                coeffs, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
-                D, E, F = coeffs
-
-                cx = -D / 2
-                cy = -E / 2
-                radius = np.sqrt(D**2/4 + E**2/4 - F)
-
-                return (cx, cy, radius)
-            except:
-                return None
-
-        # Function to trace a circular arc from one point to another
-        def trace_circular_arc(center, radius, start_point, end_point, num_points=50):
-            """Trace a circular arc from start_point to end_point along a circle."""
-            cx, cy = center
-
-            # Get angles for start and end points
-            start_angle = np.arctan2(start_point[1] - cy, start_point[0] - cx)
-            end_angle = np.arctan2(end_point[1] - cy, end_point[0] - cx)
-
-            # Calculate angular difference (take shortest path)
-            angle_diff = end_angle - start_angle
-            if angle_diff > np.pi:
-                angle_diff -= 2 * np.pi
-            elif angle_diff < -np.pi:
-                angle_diff += 2 * np.pi
-
-            # Generate points along the arc
-            angles = np.linspace(start_angle, start_angle + angle_diff, num_points)
-            arc_points = np.column_stack([
-                cx + radius * np.cos(angles),
-                cy + radius * np.sin(angles)
-            ])
-
-            return arc_points
-
-        # Extend curves through watermark using circle fitting
-        if len(detected_curves) >= 2:
-            try:
-
-                # Try to connect curves using circle fitting
-                curve_connections = []
-                for i in range(len(detected_curves)):
-                    for j in range(i + 1, len(detected_curves)):
-                        curve_i = detected_curves[i]
-                        curve_j = detected_curves[j]
-
-                        # Try fitting a circle to both curves combined
-                        combined_points = np.vstack([curve_i['points'], curve_j['points']])
-                        circle_fit = fit_circle_to_points(combined_points)
-
-                        if circle_fit is None:
-                            continue
-
-                        cx, cy, radius = circle_fit
-
-                        # Check if the circle fit is reasonable (not too large or too small)
-                        if radius < 10 or radius > 200:
-                            continue
-
-                        # Check which endpoints are in watermark and could be connected
-                        endpoints_i = [
-                            (curve_i['points'][0], 0),   # (point, index)
-                            (curve_i['points'][-1], -1)
-                        ]
-                        endpoints_j = [
-                            (curve_j['points'][0], 0),
-                            (curve_j['points'][-1], -1)
-                        ]
-
-                        # Find the best endpoint pair to connect
-                        best_connection = None
-                        best_score = float('inf')
-
-                        for ei, ei_idx in endpoints_i:
-                            for ej, ej_idx in endpoints_j:
-                                # Check if both endpoints are near the watermark boundary or inside it
-                                ei_in_wm = False
-                                ej_in_wm = False
-
-                                if 0 <= int(ei[0]) < 100 and 0 <= int(ei[1]) < 100:
-                                    # Check if endpoint is in watermark or very close to it
-                                    if watermark_mask[int(ei[1]), int(ei[0])]:
-                                        ei_in_wm = True
-                                    else:
-                                        # Check 3-pixel neighborhood for watermark
-                                        for dy in range(-3, 4):
-                                            for dx in range(-3, 4):
-                                                ny, nx = int(ei[1]) + dy, int(ei[0]) + dx
-                                                if 0 <= nx < 100 and 0 <= ny < 100:
-                                                    if watermark_mask[ny, nx]:
-                                                        ei_in_wm = True
-                                                        break
-                                            if ei_in_wm:
-                                                break
-
-                                if 0 <= int(ej[0]) < 100 and 0 <= int(ej[1]) < 100:
-                                    if watermark_mask[int(ej[1]), int(ej[0])]:
-                                        ej_in_wm = True
-                                    else:
-                                        for dy in range(-3, 4):
-                                            for dx in range(-3, 4):
-                                                ny, nx = int(ej[1]) + dy, int(ej[0]) + dx
-                                                if 0 <= nx < 100 and 0 <= ny < 100:
-                                                    if watermark_mask[ny, nx]:
-                                                        ej_in_wm = True
-                                                        break
-                                            if ej_in_wm:
-                                                break
-
-                                if not (ei_in_wm or ej_in_wm):
-                                    continue
-
-                                # Calculate how well these endpoints fit the circle
-                                dist_i = abs(np.sqrt((ei[0] - cx)**2 + (ei[1] - cy)**2) - radius)
-                                dist_j = abs(np.sqrt((ej[0] - cx)**2 + (ej[1] - cy)**2) - radius)
-                                fit_error = dist_i + dist_j
-
-                                # Also consider the angular separation (prefer arcs that make sense)
-                                angle_i = np.arctan2(ei[1] - cy, ei[0] - cx)
-                                angle_j = np.arctan2(ej[1] - cy, ej[0] - cx)
-                                angle_diff = abs(angle_j - angle_i)
-                                if angle_diff > np.pi:
-                                    angle_diff = 2 * np.pi - angle_diff
-
-                                # Prefer moderate angular separations (not too small, not too large)
-                                angle_score = abs(angle_diff - np.pi/2)  # Prefer ~90 degree arcs
-
-                                score = fit_error + angle_score * 10
-
-                                if score < best_score:
-                                    best_score = score
-                                    best_connection = {
-                                        'endpoints': (ei_idx, ej_idx),
-                                        'points': (ei, ej),
-                                        'fit_error': fit_error,
-                                        'angle_diff': angle_diff
-                                    }
-
-                        # If we found a good connection, create the arc
-                        if best_connection and best_connection['fit_error'] < 15:
-                            curve_connections.append({
-                                'curves': (i, j),
-                                'circle': (cx, cy, radius),
-                                'endpoints': best_connection['endpoints'],
-                                'endpoint_points': best_connection['points'],
-                                'fit_error': best_connection['fit_error'],
-                                'angle_diff': best_connection['angle_diff']
-                            })
-                            print(f"  Curves {i} and {j} fit same circle: center=({cx:.1f}, {cy:.1f}), radius={radius:.1f}, fit_error={best_connection['fit_error']:.1f}")
-
-                # Merge connected curves into continuous curves
-                if curve_connections:
-                    # Build a graph of curve connections
-                    from collections import defaultdict
-                    curve_graph = defaultdict(list)
-                    for conn in curve_connections:
-                        i, j = conn['curves']
-                        curve_graph[i].append(conn)
-                        curve_graph[j].append(conn)
-
-                    # Find connected components (groups of curves that should be merged)
-                    visited = set()
-                    merged_curves = []
-
-                    for start_idx in range(len(detected_curves)):
-                        if start_idx in visited:
-                            continue
-
-                        # BFS to find all connected curves
-                        connected = {start_idx}
-                        queue = [start_idx]
-                        connections_used = []
-
-                        while queue:
-                            curr = queue.pop(0)
-                            visited.add(curr)
-
-                            for conn in curve_graph[curr]:
-                                i, j = conn['curves']
-                                other = j if i == curr else i
-                                if other not in connected:
-                                    connected.add(other)
-                                    queue.append(other)
-                                    connections_used.append(conn)
-
-                        # If multiple curves connected, merge them with circular arcs
-                        if len(connected) > 1:
-                            # Merge curves using the circular arc connection
-                            for conn in connections_used:
-                                i, j = conn['curves']
-                                ei_idx, ej_idx = conn['endpoints']
-                                cx, cy, radius = conn['circle']
-                                ei, ej = conn['endpoint_points']
-
-                                # Trace the circular arc from curve i endpoint to curve j endpoint
-                                arc_points = trace_circular_arc((cx, cy), radius, ei, ej, num_points=50)
-
-                                # Build the merged curve:
-                                # - If ei_idx == 0, we connect from the start of curve i
-                                # - If ei_idx == -1, we connect from the end of curve i
-                                # - Same for curve j with ej_idx
-
-                                curve_i_points = detected_curves[i]['points']
-                                curve_j_points = detected_curves[j]['points']
-
-                                # Determine the order: curve_i -> arc -> curve_j
-                                if ei_idx == 0:
-                                    # Start of curve i, so reverse it
-                                    curve_i_ordered = curve_i_points[::-1]
-                                else:
-                                    # End of curve i, use as is
-                                    curve_i_ordered = curve_i_points
-
-                                if ej_idx == 0:
-                                    # Start of curve j, use as is
-                                    curve_j_ordered = curve_j_points
-                                else:
-                                    # End of curve j, so reverse it
-                                    curve_j_ordered = curve_j_points[::-1]
-
-                                # Merge: curve_i + arc + curve_j
-                                merged_points = np.vstack([
-                                    curve_i_ordered,
-                                    arc_points,
-                                    curve_j_ordered
-                                ])
-
-                                # Update curve i with the merged result, mark curve j for removal
-                                detected_curves[i]['points'] = merged_points
-                                detected_curves[i]['length'] = cv2.arcLength(merged_points.astype(np.float32).reshape(-1, 1, 2), False)
-                                detected_curves[j]['points'] = np.array([])  # Mark for removal
-
-            except Exception as e:
-                print(f"WARNING: Curve extension failed: {e}")
-
-            # Remove empty curves (marked for removal)
-            detected_curves = [c for c in detected_curves if len(c['points']) > 0]
 
         # Return both lines and curves
         result = {
@@ -868,12 +881,19 @@ def create_partitions(watermark_mask, lines, curves):
     return partition_map
 
 
-def find_segments(corner, template, quantization=None, core_threshold=0.15):
+def find_segments(corner, template, quantization=None, core_threshold=0.15, full_image=None):
     """
     Find color segments in the watermark region using geometric-feature-based partitioning.
 
     Key principle: Geometric features (lines/curves) create HARD BOUNDARIES that partition
     the space. Segmentation and merging happen INDEPENDENTLY within each partition.
+
+    Args:
+        corner: 100x100x3 RGB image array (bottom-right corner)
+        template: watermark template mask
+        quantization: color quantization level (optional)
+        core_threshold: threshold for core watermark region
+        full_image: optional full image for better geometric line detection
     """
     core_mask = template > core_threshold
     edge_mask = (template > 0.001) & (template <= core_threshold)  # Lowered from 0.005 to catch faint edge pixels
@@ -913,15 +933,13 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15):
     bg_variance = np.mean(np.std(bg_pixels, axis=0))
 
     # Detect geometric features FIRST
-    geometry_result = detect_geometric_features(corner, watermark_mask)
+    geometry_result = detect_geometric_features(corner, watermark_mask, full_image)
 
     detected_lines = []
     detected_curves = []
     if geometry_result:
         detected_lines = geometry_result.get('lines', [])
         detected_curves = geometry_result.get('curves', [])
-        total_features = len(detected_lines) + len(detected_curves)
-        print(f'Detected {len(detected_lines)} lines and {len(detected_curves)} curves ({total_features} total boundaries)')
 
     # For "which side of line" partitioning, use all detected lines (even short ones)
     # Short lines after trimming still define valid partition boundaries

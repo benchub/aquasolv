@@ -37,8 +37,8 @@ corner = img[-100:, -100:]
 
 print(f"Processing: {image_path}")
 
-# Use shared segmentation logic
-seg_result = find_segments(corner, template)
+# Use shared segmentation logic (pass full image for better line detection)
+seg_result = find_segments(corner, template, full_image=img)
 segments = seg_result['segments']
 segment_info = seg_result['segment_info']
 core_mask = seg_result['core_mask']

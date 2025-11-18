@@ -310,7 +310,7 @@ def segmented_inpaint_watermark(img_array, template_mask):
     # Using auto quantization for adaptive color distinction
     # IMPORTANT: Use corner_original (not sharpened corner) to avoid contamination from sharpening
     core_threshold = 0.15
-    seg_result = find_segments(corner_original, template_mask, core_threshold=core_threshold)
+    seg_result = find_segments(corner_original, template_mask, core_threshold=core_threshold, full_image=img_array)
     segments = seg_result['segments']
     segment_info = seg_result['segment_info']
     core_mask = seg_result['core_mask']

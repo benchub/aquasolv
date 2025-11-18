@@ -41,8 +41,8 @@ corner = img[-100:, -100:]
 
 print(f"Processing: {image_path}")
 
-# Use shared segmentation logic
-seg_result = find_segments(corner, template)
+# Use shared segmentation logic (pass full image for better line detection)
+seg_result = find_segments(corner, template, full_image=img)
 segments = seg_result['segments']
 segment_info = seg_result['segment_info']
 
@@ -57,29 +57,31 @@ print(f"Total segments: {len(segment_info)}")
 # Detect geometric features (lines/edges) in the background
 print("\n=== Detecting Geometric Features ===")
 
-# Apply Canny edge detection on each RGB channel to catch color boundaries
-# that have similar grayscale values but different RGB values
-edges_r = cv2.Canny(corner[:, :, 0].astype(np.uint8), 20, 80)
-edges_g = cv2.Canny(corner[:, :, 1].astype(np.uint8), 20, 80)
-edges_b = cv2.Canny(corner[:, :, 2].astype(np.uint8), 20, 80)
+# Use the shared geometry detection function with full image support
+from segmentation import detect_geometric_features
+geometry_result = detect_geometric_features(corner, watermark_mask, full_image=img)
 
-# Combine edges from all channels
-edges = np.maximum(np.maximum(edges_r, edges_g), edges_b)
+# For backward compatibility with visualization code below
+edges_background = None  # Not needed with full image approach
+lines = None
 
-# Dilate watermark mask slightly to also mask edges at the watermark boundary
-# This prevents detecting the watermark diamond edge as a background feature
-dilated_watermark = binary_dilation(watermark_mask, iterations=2)
+use_preprocessed_lines = False
+extended_lines = []
 
-# Mask to only detect edges in background (not inside or at boundary of watermark)
-edges_background = edges.copy()
-edges_background[dilated_watermark] = 0
-
-print(f"Edge detection: found {np.sum(edges_background > 0)} edge pixels in background")
-
-# Detect lines using Hough transform with more sensitive parameters
-# Use same parameters as segmentation.py
-lines = cv2.HoughLinesP(edges_background, rho=1, theta=np.pi/180, threshold=15,
-                        minLineLength=10, maxLineGap=20)
+if geometry_result:
+    # Use lines directly from geometry detection (already extended and trimmed)
+    lines_list = geometry_result.get('lines', [])
+    if lines_list:
+        # Lines are already properly extended and split at intersections
+        # Just use them directly for visualization
+        extended_lines = lines_list
+        use_preprocessed_lines = True
+        print(f"Hough transform: detected {len(lines_list)} line segments")
+        lines = None
+    else:
+        lines = None
+else:
+    lines = None
 
 def line_intersection(line1, line2):
     """Find intersection point of two lines. Returns (x, y) or None."""
@@ -100,10 +102,9 @@ def line_intersection(line1, line2):
         return (ix, iy)
     return None
 
-detected_lines = []
-extended_lines = []  # Lines extended through entire image
-
-if lines is not None:
+# Only process raw Hough lines if we didn't get pre-processed lines from geometry detection
+if not use_preprocessed_lines and lines is not None:
+    detected_lines = []
     print(f"Hough transform: detected {len(lines)} line segments")
 
     # First pass: extend all lines and store them
@@ -409,45 +410,17 @@ if lines is not None:
 else:
     print("Hough transform: no lines detected")
 
-# Also detect curves/contours in background
-contours, hierarchy = cv2.findContours(edges_background, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-print(f"Contour detection: found {len(contours)} contours in background")
-
-# Filter contours to find actual curves (not straight lines)
+# Get curves from geometry result (using full image approach)
 detected_curves = []
-for contour in contours:
-    # Filter for significant curves
-    arc_length = cv2.arcLength(contour, False)
-
-    # Only consider contours with significant length
-    if arc_length < 30:  # At least 30 pixels long
-        continue
-
-    # Simplify contour slightly to remove noise
-    epsilon = 0.5  # Small epsilon to preserve curve shape
-    approx = cv2.approxPolyDP(contour, epsilon, False)
-
-    # Check if this is actually curved (not just a straight line)
-    # by comparing arc length to chord length
-    if len(approx) >= 3:
-        # Get start and end points
-        start = approx[0][0]
-        end = approx[-1][0]
-        chord_length = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
-
-        # If arc length is significantly longer than chord, it's curved
-        curvature_ratio = arc_length / (chord_length + 0.1)  # Avoid division by zero
-        if curvature_ratio > 1.1:  # At least 10% longer than straight line
-            # Store the curve as a list of points
-            points = approx.reshape(-1, 2)
-            detected_curves.append({
-                'points': points,
-                'length': arc_length,
-                'curvature': curvature_ratio
-            })
-
-if detected_curves:
-    print(f"  Detected {len(detected_curves)} significant curves (curvature ratio > 1.1)")
+if geometry_result:
+    curves_list = geometry_result.get('curves', [])
+    if curves_list:
+        print(f"  Detected {len(curves_list)} significant curves from full image")
+        detected_curves = curves_list
+    else:
+        print("  No curves detected")
+else:
+    print("  No curves detected")
 
     # Function to fit circle to a set of points using algebraic fit
     def fit_circle_to_points(points):
