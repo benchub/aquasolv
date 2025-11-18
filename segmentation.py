@@ -257,7 +257,8 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                     if arc_length < 15:
                         continue
 
-                    epsilon = 0.5
+                    # Use adaptive epsilon - larger curves need finer approximation (smaller epsilon)
+                    epsilon = 0.5 if arc_length < 100 else 0.2
                     approx = cv2.approxPolyDP(contour, epsilon, False)
 
                     if len(approx) >= 3:
