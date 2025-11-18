@@ -1027,6 +1027,33 @@ def create_partitions(watermark_mask, lines, curves):
                 nearest_py, nearest_px = partition_pixels[indices[i]]
                 partition_map[by, bx] = partition_map[nearest_py, nearest_px]
 
+    # Track which lines/curves bound each partition (for directional sampling)
+    partition_boundaries = {}
+    if num_partitions > 0:
+        # For each partition, find which lines it's adjacent to
+        for partition_id in range(num_partitions):
+            partition_mask = (partition_map == partition_id)
+            # Dilate by 1 pixel to touch adjacent barriers
+            dilated = binary_dilation(partition_mask, iterations=1)
+            touches_barriers = dilated & barrier_map
+
+            adjacent_lines = []
+            # Check each line to see if this partition touches it
+            for line_idx, line in enumerate(lines):
+                (x1, y1), (x2, y2) = line
+                # Check if any pixels along this line are touched
+                num_points = int(np.sqrt((x2-x1)**2 + (y2-y1)**2) * 2)
+                if num_points >= 2:
+                    xs = np.linspace(x1, x2, num_points)
+                    ys = np.linspace(y1, y2, num_points)
+                    for x, y in zip(xs, ys):
+                        ix, iy = int(round(x)), int(round(y))
+                        if 0 <= ix < w and 0 <= iy < h and touches_barriers[iy, ix]:
+                            adjacent_lines.append(line)
+                            break
+
+            partition_boundaries[partition_id] = adjacent_lines
+
     # IMPORTANT: Extend partitions into boundary region (background pixels near watermark)
     # Use propagation approach: dilate each partition separately, respecting barriers
     if num_partitions > 0:
@@ -1046,7 +1073,7 @@ def create_partitions(watermark_mask, lines, curves):
                 # Assign new pixels to this partition
                 partition_map[new_pixels] = partition_id
 
-    return partition_map
+    return partition_map, partition_boundaries
 
 
 def find_segments(corner, template, quantization=None, core_threshold=0.15, full_image=None):
@@ -1115,7 +1142,7 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15, full
         print(f'  Using {len(detected_lines)} lines and {len(detected_curves)} curves for partitioning')
 
     # CREATE PARTITIONS - use "which side of line" approach for trimmed lines
-    partition_map = create_partitions(watermark_mask, detected_lines, detected_curves)
+    partition_map, partition_boundaries = create_partitions(watermark_mask, detected_lines, detected_curves)
     num_partitions = np.max(partition_map) + 1 if np.any(partition_map >= 0) else 0
 
     print(f'Created {num_partitions} partitions based on geometric features')
@@ -1345,5 +1372,6 @@ def find_segments(corner, template, quantization=None, core_threshold=0.15, full
         'bg_variance': bg_variance,
         'detected_lines': detected_lines,
         'detected_curves': detected_curves,
-        'partition_map': partition_map  # Include partition map for debugging
+        'partition_map': partition_map,  # Include partition map for debugging
+        'partition_boundaries': partition_boundaries  # Maps partition_id -> list of adjacent lines
     }

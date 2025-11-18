@@ -43,6 +43,8 @@ segments = seg_result['segments']
 segment_info = seg_result['segment_info']
 core_mask = seg_result['core_mask']
 partition_map = seg_result.get('partition_map', None)
+lines = seg_result.get('detected_lines', [])
+partition_boundaries = seg_result.get('partition_boundaries', {})
 
 # Define distinct colors for visualization
 seg_colors = [
@@ -100,8 +102,47 @@ for seg_id in unique_segments:
     seg_boundary_contact = seg_dilated & watermark_boundary
     boundary_segment_count[seg_boundary_contact] += 1
 
-segment_fill_info = {}
+# First, merge similar segments to simplify visualization
+# Segments with similar colors (within threshold) should be merged
+merged_segments = {}
+segment_to_merged = {}
+
 for info in segment_info:
+    seg_id = info['id']
+    seg_mask = info['mask']
+    seg_colors = corner[seg_mask]
+    seg_median = np.median(seg_colors, axis=0)
+
+    # Find if this matches an existing merged segment
+    matched = False
+    for merged_id, merged_info in merged_segments.items():
+        color_diff = np.linalg.norm(seg_median - merged_info['median_color'])
+        if color_diff < 20:  # Similar color threshold
+            # Merge into existing
+            merged_info['mask'] = merged_info['mask'] | seg_mask
+            merged_info['size'] += info['size']
+            merged_info['segment_ids'].append(seg_id)
+            segment_to_merged[seg_id] = merged_id
+            matched = True
+            break
+
+    if not matched:
+        # Create new merged segment
+        merged_segments[seg_id] = {
+            'id': seg_id,
+            'mask': seg_mask.copy(),
+            'size': info['size'],
+            'median_color': seg_median,
+            'partition': info.get('partition'),
+            'segment_ids': [seg_id]
+        }
+        segment_to_merged[seg_id] = seg_id
+
+print(f"Merged {len(segment_info)} segments into {len(merged_segments)} visually distinct segments")
+
+segment_fill_info = {}
+for merged_id, merged_info in merged_segments.items():
+    info = merged_info  # Use merged info for processing
     seg_id = info['id']
     seg_mask = info['mask']
     seg_partition = info.get('partition')
@@ -115,6 +156,53 @@ for info in segment_info:
     if partition_map is not None and seg_partition is not None:
         same_partition_mask = (partition_map == seg_partition)
         boundary_contact = boundary_contact & same_partition_mask
+
+        # DIRECTIONAL SAMPLING: For partitions with geometric barriers,
+        # only sample from boundary pixels in the direction away from barriers
+        # This prevents segments from sampling across the partition to wrong backgrounds
+        # Use only the lines that bound THIS partition (not all lines globally)
+        partition_lines = partition_boundaries.get(seg_partition, []) if seg_partition is not None else []
+        if partition_lines and np.sum(boundary_contact) > 0:
+            # Get segment centroid
+            seg_coords = np.argwhere(seg_mask)
+            seg_centroid = seg_coords.mean(axis=0)
+
+            # Get boundary pixel coordinates
+            boundary_coords_temp = np.argwhere(boundary_contact)
+
+            # For each boundary pixel, check if it's in the correct direction from segment
+            # relative to partition barriers (lines)
+            valid_boundary_mask = np.zeros_like(boundary_contact)
+            crosses_count = 0
+
+            for by, bx in boundary_coords_temp:
+                # Check if this direction crosses any partition barrier
+                crosses_barrier = False
+                for line in partition_lines:
+                    (lx1, ly1), (lx2, ly2) = line
+
+                    # Check if segment and boundary pixel are on opposite sides of line
+                    # Using cross product to determine which side
+                    # Note: seg_centroid is (y, x) from argwhere
+                    seg_y, seg_x = seg_centroid[0], seg_centroid[1]
+                    seg_cross = (lx2 - lx1) * (seg_y - ly1) - (ly2 - ly1) * (seg_x - lx1)
+                    boundary_cross = (lx2 - lx1) * (by - ly1) - (ly2 - ly1) * (bx - lx1)
+
+                    # If signs differ, they're on opposite sides of the line
+                    if seg_cross * boundary_cross < 0:
+                        crosses_barrier = True
+                        crosses_count += 1
+                        break
+
+                if not crosses_barrier:
+                    valid_boundary_mask[by, bx] = True
+
+            # Apply directional filter
+            before_count = np.sum(boundary_contact)
+            boundary_contact = boundary_contact & valid_boundary_mask
+            after_count = np.sum(boundary_contact)
+            if crosses_count > 0:
+                print(f"    Segment {seg_id}: Directional filter: {before_count} boundary pixels, {crosses_count} cross barriers -> {after_count} remaining")
 
     if np.sum(boundary_contact) > 0:
         # Segment touches boundary - sample from boundary
@@ -173,6 +261,35 @@ for info in segment_info:
             if partition_map is not None and seg_partition is not None:
                 same_partition_mask = (partition_map == seg_partition)
                 boundary_contact = boundary_contact & same_partition_mask
+
+                # DIRECTIONAL SAMPLING: same as for boundary-touching segments
+                # Use only the lines that bound THIS partition (not all lines globally)
+                partition_lines = partition_boundaries.get(seg_partition, []) if seg_partition is not None else []
+                if dil == 1 and seg_id == 21:  # Debug for segment 21
+                    print(f"    DEBUG: Segment {seg_id} is in partition {seg_partition}, bounded by {len(partition_lines)} lines")
+                if partition_lines and np.sum(boundary_contact) > 0:
+                    seg_coords = np.argwhere(seg_mask)
+                    seg_centroid = seg_coords.mean(axis=0)
+                    boundary_coords_temp = np.argwhere(boundary_contact)
+                    valid_boundary_mask = np.zeros_like(boundary_contact)
+
+                    for by, bx in boundary_coords_temp:
+                        crosses_barrier = False
+                        for line in partition_lines:
+                            (lx1, ly1), (lx2, ly2) = line
+                            seg_cross = (lx2 - lx1) * (seg_centroid[0] - ly1) - (ly2 - ly1) * (seg_centroid[1] - lx1)
+                            boundary_cross = (lx2 - lx1) * (by - ly1) - (ly2 - ly1) * (bx - lx1)
+                            if seg_cross * boundary_cross < 0:
+                                crosses_barrier = True
+                                break
+                        if not crosses_barrier:
+                            valid_boundary_mask[by, bx] = True
+
+                    before_count_int = np.sum(boundary_contact)
+                    boundary_contact = boundary_contact & valid_boundary_mask
+                    after_count_int = np.sum(boundary_contact)
+                    if before_count_int != after_count_int:
+                        print(f"    Segment {seg_id} (interior, dil={dil}): Directional filter: {before_count_int} -> {after_count_int} boundary pixels")
 
             if np.sum(boundary_contact) > 0:
                 boundary_coords = np.argwhere(boundary_contact)
