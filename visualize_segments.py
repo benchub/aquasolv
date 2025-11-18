@@ -43,7 +43,6 @@ segments = seg_result['segments']
 segment_info = seg_result['segment_info']
 core_mask = seg_result['core_mask']
 partition_map = seg_result.get('partition_map', None)
-lines = seg_result.get('detected_lines', [])
 
 # Define distinct colors for visualization
 seg_colors = [
@@ -117,35 +116,6 @@ for info in segment_info:
         same_partition_mask = (partition_map == seg_partition)
         boundary_contact = boundary_contact & same_partition_mask
 
-    # ADDITIONAL LINE-CROSSING FILTER: Even within the same partition, don't cross detected lines
-    # This handles cases where partitions incorrectly span multiple lines
-    if lines and np.sum(boundary_contact) > 0:
-        seg_coords = np.argwhere(seg_mask)
-        seg_centroid = seg_coords.mean(axis=0)  # [y, x]
-
-        boundary_coords_temp = np.argwhere(boundary_contact)
-        valid_boundary_mask = np.zeros_like(boundary_contact)
-
-        for by, bx in boundary_coords_temp:
-            # Check if this boundary pixel crosses any detected line from segment centroid
-            crosses_line = False
-            for line in lines:
-                (lx1, ly1), (lx2, ly2) = line
-                # Check if segment centroid and boundary pixel are on opposite sides of this line
-                # Using cross product: if signs differ, they're on opposite sides
-                seg_cross = (lx2 - lx1) * (seg_centroid[0] - ly1) - (ly2 - ly1) * (seg_centroid[1] - lx1)
-                boundary_cross = (lx2 - lx1) * (by - ly1) - (ly2 - ly1) * (bx - lx1)
-                if seg_cross * boundary_cross < 0:  # Opposite sides
-                    crosses_line = True
-                    break
-
-            if not crosses_line:
-                valid_boundary_mask[by, bx] = True
-
-        # Only apply if we don't filter out ALL pixels
-        if np.any(valid_boundary_mask):
-            boundary_contact = boundary_contact & valid_boundary_mask
-
     if np.sum(boundary_contact) > 0:
         # Segment touches boundary - sample from boundary
         boundary_coords = np.argwhere(boundary_contact)
@@ -203,35 +173,6 @@ for info in segment_info:
             if partition_map is not None and seg_partition is not None:
                 same_partition_mask = (partition_map == seg_partition)
                 boundary_contact = boundary_contact & same_partition_mask
-
-            # ADDITIONAL LINE-CROSSING FILTER: Even within the same partition, don't cross detected lines
-            # This handles cases where partitions incorrectly span multiple lines
-            if lines and np.sum(boundary_contact) > 0:
-                seg_coords = np.argwhere(seg_mask)
-                seg_centroid = seg_coords.mean(axis=0)  # [y, x]
-
-                boundary_coords_temp = np.argwhere(boundary_contact)
-                valid_boundary_mask = np.zeros_like(boundary_contact)
-
-                for by, bx in boundary_coords_temp:
-                    # Check if this boundary pixel crosses any detected line from segment centroid
-                    crosses_line = False
-                    for line in lines:
-                        (lx1, ly1), (lx2, ly2) = line
-                        # Check if segment centroid and boundary pixel are on opposite sides of this line
-                        # Using cross product: if signs differ, they're on opposite sides
-                        seg_cross = (lx2 - lx1) * (seg_centroid[0] - ly1) - (ly2 - ly1) * (seg_centroid[1] - lx1)
-                        boundary_cross = (lx2 - lx1) * (by - ly1) - (ly2 - ly1) * (bx - lx1)
-                        if seg_cross * boundary_cross < 0:  # Opposite sides
-                            crosses_line = True
-                            break
-
-                    if not crosses_line:
-                        valid_boundary_mask[by, bx] = True
-
-                # Only apply if we don't filter out ALL pixels
-                if np.any(valid_boundary_mask):
-                    boundary_contact = boundary_contact & valid_boundary_mask
 
             if np.sum(boundary_contact) > 0:
                 boundary_coords = np.argwhere(boundary_contact)
