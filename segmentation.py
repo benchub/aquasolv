@@ -944,37 +944,18 @@ def create_partitions(watermark_mask, lines, curves):
     # Add line barriers
     for line in lines:
         (x1, y1), (x2, y2) = line
-
-        # EXTEND lines to span full watermark region to prevent wrap-around
-        # Detect if line is primarily horizontal or vertical
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
-
-        if dy < dx:  # Horizontal line
-            # Extend to full width of watermark
-            x1_ext, x2_ext = 0, w - 1
-            # Keep y value from the line (use midpoint if line is slightly slanted)
-            y_ext = (y1 + y2) / 2
-            xs = np.linspace(x1_ext, x2_ext, w)
-            ys = np.full(w, y_ext)
-        else:  # Vertical line
-            # Extend to full height of watermark
-            y1_ext, y2_ext = 0, h - 1
-            # Keep x value from the line
-            x_ext = (x1 + x2) / 2
-            ys = np.linspace(y1_ext, y2_ext, h)
-            xs = np.full(h, x_ext)
-
-        # Draw extended line with 3-pixel thickness
+        # Draw thick line to ensure proper separation
+        num_points = int(np.sqrt((x2-x1)**2 + (y2-y1)**2) * 2)
+        if num_points < 2:
+            continue
+        xs = np.linspace(x1, x2, num_points)
+        ys = np.linspace(y1, y2, num_points)
         for x, y in zip(xs, ys):
             ix, iy = int(round(x)), int(round(y))
             if 0 <= ix < w and 0 <= iy < h:
-                # Make barriers 3 pixels thick to prevent partitions from wrapping around
-                for dy_off in range(-1, 2):
-                    for dx_off in range(-1, 2):
-                        ny, nx = iy + dy_off, ix + dx_off
-                        if 0 <= nx < w and 0 <= ny < h:
-                            barrier_map[ny, nx] = True
+                barrier_map[iy, ix] = True
+                # Keep barriers thin (1 pixel) to allow narrow regions between
+                # parallel lines to form their own partitions (e.g., black borders)
 
     # Add curve barriers
     for curve in curves:
@@ -982,12 +963,8 @@ def create_partitions(watermark_mask, lines, curves):
         for x, y in curve_points:
             ix, iy = int(round(x)), int(round(y))
             if 0 <= ix < w and 0 <= iy < h:
-                # Make barriers 3 pixels thick like lines
-                for dy in range(-1, 2):
-                    for dx in range(-1, 2):
-                        ny, nx = iy + dy, ix + dx
-                        if 0 <= nx < w and 0 <= ny < h:
-                            barrier_map[ny, nx] = True
+                barrier_map[iy, ix] = True
+                # Keep barriers thin (1 pixel) like lines
 
     # Create regions: watermark pixels that are NOT barriers
     connectable_region = watermark_mask & (~barrier_map)
@@ -1053,8 +1030,7 @@ def create_partitions(watermark_mask, lines, curves):
     # IMPORTANT: Extend partitions into boundary region (background pixels near watermark)
     # Use propagation approach: dilate each partition separately, respecting barriers
     if num_partitions > 0:
-        # Dilate each partition outward into boundary, but STOP AT BARRIER LINES
-        # Don't cross barriers even in boundary region to maintain separation
+        # Dilate each partition outward into boundary, but stop at barrier pixels
         # Use 20 iterations to cover boundary region (watermark boundary can be up to 15 pixels away)
         for iteration in range(20):  # Increased from 6 to 20 to match increased boundary dilation
             for partition_id in range(num_partitions):
@@ -1064,9 +1040,8 @@ def create_partitions(watermark_mask, lines, curves):
                 # Dilate by 1 pixel
                 dilated = binary_dilation(partition_pixels, iterations=1)
 
-                # Only extend into unassigned pixels that are NOT on barrier lines
-                # This prevents partitions from crossing geometric features during extension
-                new_pixels = dilated & (partition_map == -1) & (~barrier_map)
+                # Only extend into unassigned pixels (not barriers, not other partitions)
+                new_pixels = dilated & (partition_map == -1)
 
                 # Assign new pixels to this partition
                 partition_map[new_pixels] = partition_id
