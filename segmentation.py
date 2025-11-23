@@ -938,56 +938,259 @@ def create_partitions(watermark_mask, lines, curves):
 
         return partition_map
 
-    # Create a barrier map: mark pixels ON or very close to lines/curves as barriers
-    barrier_map = np.zeros((h, w), dtype=bool)
+    # Strategy: For L-shaped line pairs that form nested rectangles, create explicit rectangular partitions
+    # For remaining regions and curves, use connected components with barriers
 
-    # Add line barriers
-    for line in lines:
-        (x1, y1), (x2, y2) = line
-        # Draw thick line to ensure proper separation
-        num_points = int(np.sqrt((x2-x1)**2 + (y2-y1)**2) * 2)
-        if num_points < 2:
-            continue
-        xs = np.linspace(x1, x2, num_points)
-        ys = np.linspace(y1, y2, num_points)
-        for x, y in zip(xs, ys):
-            ix, iy = int(round(x)), int(round(y))
-            if 0 <= ix < w and 0 <= iy < h:
-                barrier_map[iy, ix] = True
-                # Keep barriers thin (1 pixel) to allow narrow regions between
-                # parallel lines to form their own partitions (e.g., black borders)
+    # Find L-shaped line pairs (horizontal + vertical lines that intersect and both originate from boundaries)
+    # These form nested rectangular "frames"
+    nested_rectangles = []
 
-    # Add curve barriers
-    for curve in curves:
-        curve_points = curve['points']
-        for x, y in curve_points:
-            ix, iy = int(round(x)), int(round(y))
-            if 0 <= ix < w and 0 <= iy < h:
-                barrier_map[iy, ix] = True
-                # Keep barriers thin (1 pixel) like lines
+    for i, line1 in enumerate(lines):
+        (x1_1, y1_1), (x2_1, y2_1) = line1
+        dx1 = abs(x2_1 - x1_1)
+        dy1 = abs(y2_1 - y1_1)
+        is_h1 = dx1 > dy1
+        is_v1 = dy1 > dx1
 
-    # Create regions: watermark pixels that are NOT barriers
-    connectable_region = watermark_mask & (~barrier_map)
+        for j, line2 in enumerate(lines):
+            if i >= j:
+                continue
+            (x1_2, y1_2), (x2_2, y2_2) = line2
+            dx2 = abs(x2_2 - x1_2)
+            dy2 = abs(y2_2 - y1_2)
+            is_h2 = dx2 > dy2
+            is_v2 = dy2 > dx2
 
-    # Run connected components to find partitions
-    structure = np.ones((3, 3), dtype=int)  # 8-connectivity
-    labeled, num_partitions = connected_components_label(connectable_region, structure=structure)
+            # Check if perpendicular
+            if not ((is_h1 and is_v2) or (is_v1 and is_h2)):
+                continue
 
-    # Create final partition map
+            # Identify which is horizontal and which is vertical
+            if is_h1:
+                h_line, v_line = line1, line2
+            else:
+                h_line, v_line = line2, line1
+
+            (hx1, hy1), (hx2, hy2) = h_line
+            (vx1, vy1), (vx2, vy2) = v_line
+
+            h_y = (hy1 + hy2) / 2
+            v_x = (vx1 + vx2) / 2
+
+            # Check if they intersect at their endpoints (L-shape meeting at corner)
+            hx_min, hx_max = min(hx1, hx2), max(hx1, hx2)
+            vy_min, vy_max = min(vy1, vy2), max(vy1, vy2)
+
+            if hx_min <= v_x <= hx_max and vy_min <= h_y <= vy_max:
+                # Check if both lines originate from boundaries (x=0 or y=0)
+                h_starts_at_boundary = min(hx1, hx2) < 2  # Close to x=0
+                v_starts_at_boundary = min(vy1, vy2) < 2  # Close to y=0
+
+                if h_starts_at_boundary and v_starts_at_boundary:
+                    # This is an L-shaped pair forming a nested rectangle
+                    # Rectangle is from (0,0) to (v_x, h_y)
+                    nested_rectangles.append((v_x, h_y))
+
+    # Sort nested rectangles by area (smallest to largest)
+    nested_rectangles.sort(key=lambda r: r[0] * r[1])
+
+    print(f"  Found {len(nested_rectangles)} nested rectangles: {nested_rectangles}")
+
+    # Create partition map by assigning nested rectangular regions
     partition_map = np.full((h, w), -1, dtype=int)
-    partition_map[connectable_region] = labeled[connectable_region] - 1  # Make 0-indexed
+    partition_id = 0
+
+    # Track which rectangle each partition belongs to (for constraints during dilation)
+    partition_to_rectangle = {}  # partition_id -> rectangle_idx
+
+    # Create each rectangular partition (frame between consecutive rectangles)
+    prev_x, prev_y = 0, 0
+    for idx, (rect_x, rect_y) in enumerate(nested_rectangles):
+        rx = int(round(rect_x))
+        ry = int(round(rect_y))
+
+        # Create the rectangular "frame" between previous rectangle and current one
+        # Lines run BETWEEN pixels, so line at x=28 means x<28 is inside, x>=28 is outside
+        count = 0
+        for y in range(h):
+            for x in range(w):
+                if not watermark_mask[y, x]:
+                    continue
+                # Check if pixel is in the current rectangle but not in previous rectangle
+                in_current = (x < rx and y < ry)
+                in_previous = (x < prev_x and y < prev_y)
+
+                if in_current and not in_previous and partition_map[y, x] == -1:
+                    partition_map[y, x] = partition_id
+                    count += 1
+
+        print(f"    Rectangle {idx} ({rx},{ry}): assigned {count} pixels to partition {partition_id}")
+
+        # Record which rectangle this partition belongs to
+        partition_to_rectangle[partition_id] = idx
+
+        # If curves exist, check if this partition needs to be subdivided
+        if len(curves) > 0 and count > 0:
+            # Create a barrier map from curves (thickened to ensure complete barriers)
+            barrier_map = np.zeros((h, w), dtype=bool)
+            for curve in curves:
+                curve_points = curve['points']
+                for cx, cy in curve_points:
+                    # Thicken curve to 3x3 to ensure it acts as a complete barrier
+                    for dy in range(-1, 2):
+                        for dx in range(-1, 2):
+                            ix, iy = int(round(cx)) + dx, int(round(cy)) + dy
+                            if 0 <= ix < w and 0 <= iy < h:
+                                barrier_map[iy, ix] = True
+
+            # Find connected components within this partition, respecting curve barriers
+            partition_mask = (partition_map == partition_id)
+            connectable_region = partition_mask & (~barrier_map)
+
+            # Count how many partition pixels are blocked by barriers
+            barrier_overlap = np.sum(partition_mask & barrier_map)
+            print(f"      Curve barriers overlap with {barrier_overlap} partition pixels")
+
+            if np.any(connectable_region):
+                structure = np.ones((3, 3), dtype=int)  # 8-connectivity
+                labeled, num_components = connected_components_label(connectable_region, structure=structure)
+                print(f"      Found {num_components} connected components after applying curve barriers")
+
+                # If curves split this partition into multiple components, create separate partitions
+                if num_components > 1:
+                    print(f"      Curves split rectangle {idx} into {num_components} sub-partitions")
+                    # Clear the original partition assignment
+                    partition_map[partition_mask] = -1
+                    # Remove the original partition from the mapping
+                    del partition_to_rectangle[partition_id]
+
+                    # Track the first partition ID for this rectangle
+                    first_sub_partition_id = partition_id
+
+                    # Assign each component to a new partition
+                    for component_id in range(1, num_components + 1):
+                        component_mask = (labeled == component_id)
+                        partition_map[component_mask] = partition_id
+                        sub_count = np.sum(component_mask)
+                        # Record that this sub-partition belongs to the same rectangle
+                        partition_to_rectangle[partition_id] = idx
+                        print(f"        Sub-partition {partition_id}: {sub_count} pixels (rectangle {idx})")
+                        partition_id += 1
+
+                    # Assign barrier pixels (pixels on the curve) to the nearest sub-partition
+                    # These pixels should belong to one of the sub-partitions, not remain unassigned
+                    barrier_pixels_in_rect = partition_mask & barrier_map
+                    if np.any(barrier_pixels_in_rect):
+                        barrier_coords = np.argwhere(barrier_pixels_in_rect)
+                        num_sub_partitions = partition_id - first_sub_partition_id
+
+                        # For each sub-partition, find its pixels
+                        sub_partition_coords = []
+                        for sub_pid in range(first_sub_partition_id, partition_id):
+                            coords = np.argwhere(partition_map == sub_pid)
+                            if len(coords) > 0:
+                                sub_partition_coords.append((sub_pid, coords))
+
+                        # Assign each barrier pixel to nearest sub-partition
+                        for by, bx in barrier_coords:
+                            min_dist = float('inf')
+                            nearest_pid = first_sub_partition_id
+                            for sub_pid, coords in sub_partition_coords:
+                                # Find distance to nearest pixel in this sub-partition
+                                dists = np.sqrt((coords[:, 0] - by)**2 + (coords[:, 1] - bx)**2)
+                                min_sub_dist = np.min(dists)
+                                if min_sub_dist < min_dist:
+                                    min_dist = min_sub_dist
+                                    nearest_pid = sub_pid
+                            partition_map[by, bx] = nearest_pid
+
+                        print(f"        Assigned {len(barrier_coords)} curve pixels to nearest sub-partitions")
+
+                    # Decrement by 1 since we'll increment at the end
+                    partition_id -= 1
+
+        partition_id += 1
+        prev_x, prev_y = rx, ry
+
+    # The remaining unassigned watermark pixels form the outermost partition
+    # (everything outside the largest nested rectangle)
+    # IMPORTANT: Always create this outer partition even if empty, because it will
+    # expand during dilation to sample from boundary pixels
+    outer_partition_id = partition_id
+    unassigned_mask = (partition_map == -1) & watermark_mask
+    if np.any(unassigned_mask):
+        # Assign all remaining watermark pixels to outer partition
+        partition_map[unassigned_mask] = outer_partition_id
+        print(f"    Outer region: assigned {np.sum(unassigned_mask)} pixels to partition {outer_partition_id}")
+        partition_id += 1
+    else:
+        # Even if no watermark pixels are outside, create empty outer partition
+        # It will be populated during dilation phase
+        print(f"    Outer region: created empty partition {outer_partition_id}")
+        partition_id += 1
+
+    # For non-rectangular partitions, try connected components
+    unassigned_mask = (partition_map == -1) & watermark_mask
+
+    if len(nested_rectangles) == 0 and np.any(unassigned_mask):
+        # Create a barrier map for remaining regions
+        barrier_map = np.zeros((h, w), dtype=bool)
+
+        # Add line barriers
+        for line in lines:
+            (x1, y1), (x2, y2) = line
+            num_points = int(np.sqrt((x2-x1)**2 + (y2-y1)**2) * 2)
+            if num_points < 2:
+                continue
+            xs = np.linspace(x1, x2, num_points)
+            ys = np.linspace(y1, y2, num_points)
+            for x, y in zip(xs, ys):
+                ix, iy = int(round(x)), int(round(y))
+                if 0 <= ix < w and 0 <= iy < h:
+                    barrier_map[iy, ix] = True
+
+        # Add curve barriers
+        for curve in curves:
+            curve_points = curve['points']
+            for x, y in curve_points:
+                ix, iy = int(round(x)), int(round(y))
+                if 0 <= ix < w and 0 <= iy < h:
+                    barrier_map[iy, ix] = True
+
+        # Create regions: unassigned watermark pixels that are NOT barriers
+        connectable_region = unassigned_mask & (~barrier_map)
+
+        if np.any(connectable_region):
+            # Run connected components to find partitions
+            structure = np.ones((3, 3), dtype=int)  # 8-connectivity
+            labeled, num_new_partitions = connected_components_label(connectable_region, structure=structure)
+
+            # Assign these partitions continuing from partition_id
+            for new_pid in range(1, num_new_partitions + 1):
+                partition_map[labeled == new_pid] = partition_id
+                partition_id += 1
 
     # IMPORTANT: Merge tiny partitions into their neighbors to avoid corner isolation
-    # Small pixel groups near line intersections should not form separate partitions
+    num_partitions = partition_id
     if num_partitions > 1:
         # Count partition sizes
         partition_sizes = {}
         for pid in range(num_partitions):
             partition_sizes[pid] = np.sum(partition_map == pid)
 
-        # Merge partitions smaller than threshold (50 pixels)
+        # For rectangular partitions from nested L-shapes, don't merge even if empty
+        # They represent conceptual regions for color sampling even if watermark doesn't overlap
+        # Only merge if they came from connected components (have very few pixels)
+        rectangular_partition_count = len(nested_rectangles)
+
+        # Merge partitions smaller than threshold
+        # But skip the first rectangular_partition_count partitions (keep nested rectangles)
         small_threshold = 50
         for small_pid in range(num_partitions):
+            # Don't merge rectangular partitions (even if empty/small)
+            if small_pid < rectangular_partition_count:
+                continue
+
             if partition_sizes[small_pid] >= small_threshold:
                 continue
 
@@ -1006,33 +1209,234 @@ def create_partitions(watermark_mask, lines, curves):
                 partition_sizes[most_common_neighbor] += partition_sizes[small_pid]
                 partition_sizes[small_pid] = 0
 
-        # Renumber partitions to be contiguous (0, 1, 2, ...)
-        unique_pids = sorted([pid for pid in partition_sizes if partition_sizes[pid] > 0])
-        pid_remap = {old_pid: new_pid for new_pid, old_pid in enumerate(unique_pids)}
-        new_partition_map = np.full((h, w), -1, dtype=int)
-        for old_pid, new_pid in pid_remap.items():
-            new_partition_map[partition_map == old_pid] = new_pid
-        partition_map = new_partition_map
-        num_partitions = len(unique_pids)
+        # Keep all rectangular partitions plus non-empty others
+        # Don't compact/renumber so rectangular partitions keep their IDs
+        num_partitions = max(partition_map[partition_map >= 0]) + 1 if np.any(partition_map >= 0) else 0
 
     # Handle barrier pixels: assign them to nearest partition
-    barrier_pixels = np.argwhere(watermark_mask & barrier_map)
-    if len(barrier_pixels) > 0 and num_partitions > 0:
-        partition_pixels = np.argwhere(partition_map >= 0)
-        from scipy.spatial import cKDTree
-        if len(partition_pixels) > 0:
-            tree = cKDTree(partition_pixels)
-            distances, indices = tree.query(barrier_pixels)
-            for i, (by, bx) in enumerate(barrier_pixels):
-                nearest_py, nearest_px = partition_pixels[indices[i]]
-                partition_map[by, bx] = partition_map[nearest_py, nearest_px]
+    # Only for connected components approach, NOT for rectangular partitions
+    # For rectangular partitions, keep barriers as walls (=-1)
+    if 'barrier_map' in locals() and len(nested_rectangles) == 0:
+        barrier_pixels = np.argwhere(watermark_mask & barrier_map)
+        if len(barrier_pixels) > 0 and num_partitions > 0:
+            partition_pixels = np.argwhere(partition_map >= 0)
+            from scipy.spatial import cKDTree
+            if len(partition_pixels) > 0:
+                tree = cKDTree(partition_pixels)
+                distances, indices = tree.query(barrier_pixels)
+                for i, (by, bx) in enumerate(barrier_pixels):
+                    nearest_py, nearest_px = partition_pixels[indices[i]]
+                    partition_map[by, bx] = partition_map[nearest_py, nearest_px]
 
     # IMPORTANT: Extend partitions into boundary region (background pixels near watermark)
-    # Use propagation approach: dilate each partition separately, respecting barriers
+    # Use propagation approach: dilate each partition separately, respecting GEOMETRIC barriers
     if num_partitions > 0:
-        # Dilate each partition outward into boundary, but stop at barrier pixels
+        # Create a set of curve barrier pixels for fast lookup
+        curve_barrier_pixels = set()
+        for curve in curves:
+            curve_points = curve['points']
+            for cx, cy in curve_points:
+                # Add curve pixel and immediate neighbors to barrier
+                for dy in range(-1, 2):
+                    for dx in range(-1, 2):
+                        ix, iy = int(round(cx)) + dx, int(round(cy)) + dy
+                        if 0 <= ix < w and 0 <= iy < h:
+                            curve_barrier_pixels.add((ix, iy))
+
+        # For each partition, determine which side of each line it's on
+        # We'll use this to prevent crossing lines during dilation
+        partition_constraints = {}  # partition_id -> list of (line, side) tuples
+
+        # Special handling for nested rectangles: each rectangular partition should be
+        # constrained by ALL rectangle boundaries it's between
+        if len(nested_rectangles) > 0:
+            # For rectangular partitions, add constraints from ALL rectangle lines
+            # Key principle: if a partition starts on one side of a line, it can NEVER cross to the other side
+            for partition_id in range(num_partitions):
+                partition_pixels = np.argwhere(partition_map == partition_id)
+                if len(partition_pixels) == 0:
+                    partition_constraints[partition_id] = []
+                    continue
+
+                constraints = []
+
+                # Check which side of each line this partition is on
+                for line in lines:
+                    (x1, y1), (x2, y2) = line
+                    dx = abs(x2 - x1)
+                    dy = abs(y2 - y1)
+
+                    if dx > dy:  # Horizontal line
+                        line_y = (y1 + y2) / 2
+                        line_x1, line_x2 = min(x1, x2), max(x1, x2)
+
+                        # For nested rectangles, extend the line's range to full width
+                        # because these lines define rectangle boundaries that apply everywhere
+                        line_x1, line_x2 = 0, w
+
+                        # Check which side the partition is on
+                        above_count = 0
+                        below_count = 0
+                        for py, px in partition_pixels:
+                            if py < line_y - 0.5:
+                                above_count += 1
+                            elif py > line_y + 0.5:
+                                below_count += 1
+
+                        # Add constraint if partition is clearly on one side
+                        if above_count > 0 and below_count == 0:
+                            constraints.append(('horizontal', line_y, line_x1, line_x2, 'above'))
+                        elif below_count > 0 and above_count == 0:
+                            constraints.append(('horizontal', line_y, line_x1, line_x2, 'below'))
+
+                    else:  # Vertical line
+                        line_x = (x1 + x2) / 2
+                        line_y1, line_y2 = min(y1, y2), max(y1, y2)
+
+                        # For nested rectangles, extend the line's range to full height
+                        line_y1, line_y2 = 0, h
+
+                        # Check which side the partition is on
+                        left_count = 0
+                        right_count = 0
+                        for py, px in partition_pixels:
+                            if px < line_x - 0.5:
+                                left_count += 1
+                            elif px > line_x + 0.5:
+                                right_count += 1
+
+                        # Add constraint if partition is clearly on one side
+                        if left_count > 0 and right_count == 0:
+                            constraints.append(('vertical', line_x, line_y1, line_y2, 'left'))
+                        elif right_count > 0 and left_count == 0:
+                            constraints.append(('vertical', line_x, line_y1, line_y2, 'right'))
+
+                partition_constraints[partition_id] = constraints
+        else:
+            # For non-rectangular partitions, use line-based constraints
+            for partition_id in range(num_partitions):
+                partition_pixels = np.argwhere(partition_map == partition_id)
+                if len(partition_pixels) == 0:
+                    partition_constraints[partition_id] = []
+                    continue
+
+                constraints = []
+                for line in lines:
+                    (x1, y1), (x2, y2) = line
+
+                    # Determine if this is primarily horizontal or vertical
+                    dx = abs(x2 - x1)
+                    dy = abs(y2 - y1)
+
+                    if dx > dy:  # Horizontal line
+                        # Line equation: y = constant (approximately y1)
+                        line_y = (y1 + y2) / 2
+                        line_x1, line_x2 = min(x1, x2), max(x1, x2)
+
+                        # Check which side the partition is on
+                        # Count pixels above vs below the line (within x range)
+                        above_count = 0
+                        below_count = 0
+                        for py, px in partition_pixels:
+                            if line_x1 <= px <= line_x2:
+                                if py < line_y:
+                                    above_count += 1
+                                elif py > line_y:
+                                    below_count += 1
+
+                        # If partition has pixels predominantly on one side, constrain it
+                        if above_count > 0 and below_count == 0:
+                            constraints.append(('horizontal', line_y, line_x1, line_x2, 'above'))
+                        elif below_count > 0 and above_count == 0:
+                            constraints.append(('horizontal', line_y, line_x1, line_x2, 'below'))
+
+                    else:  # Vertical line
+                        # Line equation: x = constant (approximately x1)
+                        line_x = (x1 + x2) / 2
+                        line_y1, line_y2 = min(y1, y2), max(y1, y2)
+
+                        # Check which side the partition is on
+                        left_count = 0
+                        right_count = 0
+                        for py, px in partition_pixels:
+                            if line_y1 <= py <= line_y2:
+                                if px < line_x:
+                                    left_count += 1
+                                elif px > line_x:
+                                    right_count += 1
+
+                        # If partition has pixels predominantly on one side, constrain it
+                        if left_count > 0 and right_count == 0:
+                            constraints.append(('vertical', line_x, line_y1, line_y2, 'left'))
+                        elif right_count > 0 and left_count == 0:
+                            constraints.append(('vertical', line_x, line_y1, line_y2, 'right'))
+
+                partition_constraints[partition_id] = constraints
+
+        # Helper function to check if a pixel respects geometric constraints
+        def can_dilate_to_pixel(px, py, partition_id):
+            """Check if partition can dilate to pixel (px, py) without crossing geometric barriers"""
+            # First, check if pixel is on a curve (curves act as barriers for all partitions)
+            if (px, py) in curve_barrier_pixels:
+                return False  # Pixel is on curve barrier - reject
+
+            # For nested rectangles, check rectangular exclusion zones
+            if len(nested_rectangles) > 0:
+                # Partition i must stay OUTSIDE rectangle i-1 (if it exists)
+                # and INSIDE rectangle i (if it exists)
+
+                # Check if pixel is inside any smaller rectangle that this partition should avoid
+                # Use partition_to_rectangle mapping to find which rectangle this partition belongs to
+                if partition_id in partition_to_rectangle:
+                    rect_idx = partition_to_rectangle[partition_id]
+
+                    # This partition must stay OUTSIDE all inner rectangles (indices < rect_idx)
+                    if rect_idx > 0:
+                        inner_rect_idx = rect_idx - 1
+                        rect_x, rect_y = nested_rectangles[inner_rect_idx]
+                        # Pixel must NOT be inside this inner rectangle
+                        # Lines at rect_x, rect_y run BETWEEN pixels, so x < rect_x means inside
+                        if px < rect_x and py < rect_y:
+                            return False  # Pixel is inside inner rectangle - reject
+
+                    # This partition must stay INSIDE its own rectangle (index rect_idx)
+                    rect_x, rect_y = nested_rectangles[rect_idx]
+                    # Pixel must be inside this outer rectangle
+                    # Lines at rect_x, rect_y run BETWEEN pixels, so x >= rect_x means outside
+                    if px >= rect_x or py >= rect_y:
+                        return False  # Pixel is outside outer rectangle - reject
+
+                return True
+
+            # For non-rectangular partitions, use line constraints
+            constraints = partition_constraints.get(partition_id, [])
+
+            for constraint in constraints:
+                if constraint[0] == 'horizontal':
+                    _, line_y, line_x1, line_x2, side = constraint
+                    # Check if pixel is in the line's x range
+                    if line_x1 <= px <= line_x2:
+                        # Check if pixel is on the wrong side
+                        if side == 'above' and py > line_y:
+                            return False  # Partition is above, pixel is below
+                        elif side == 'below' and py < line_y:
+                            return False  # Partition is below, pixel is above
+
+                elif constraint[0] == 'vertical':
+                    _, line_x, line_y1, line_y2, side = constraint
+                    # Check if pixel is in the line's y range
+                    if line_y1 <= py <= line_y2:
+                        # Check if pixel is on the wrong side
+                        if side == 'left' and px > line_x:
+                            return False  # Partition is left, pixel is right
+                        elif side == 'right' and px < line_x:
+                            return False  # Partition is right, pixel is left
+
+            return True
+
+        # Dilate each partition outward into boundary, respecting geometric constraints
         # Use 20 iterations to cover boundary region (watermark boundary can be up to 15 pixels away)
-        for iteration in range(20):  # Increased from 6 to 20 to match increased boundary dilation
+        for iteration in range(20):
             for partition_id in range(num_partitions):
                 # Get current partition pixels
                 partition_pixels = (partition_map == partition_id)
@@ -1040,11 +1444,14 @@ def create_partitions(watermark_mask, lines, curves):
                 # Dilate by 1 pixel
                 dilated = binary_dilation(partition_pixels, iterations=1)
 
-                # Only extend into unassigned pixels (not barriers, not other partitions)
-                new_pixels = dilated & (partition_map == -1)
+                # Get candidate new pixels (unassigned pixels in dilated region)
+                candidate_mask = dilated & (partition_map == -1)
+                candidate_coords = np.argwhere(candidate_mask)
 
-                # Assign new pixels to this partition
-                partition_map[new_pixels] = partition_id
+                # Check each candidate pixel against geometric constraints
+                for py, px in candidate_coords:
+                    if can_dilate_to_pixel(px, py, partition_id):
+                        partition_map[py, px] = partition_id
 
     return partition_map
 
