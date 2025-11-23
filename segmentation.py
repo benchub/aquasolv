@@ -257,6 +257,19 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                 orientation = 'V' if dy > dx else 'H'
                 print(f"    L{i} [{orientation}]: ({x1:.1f},{y1:.1f}) -> ({x2:.1f},{y2:.1f})")
 
+            # Filter to only keep axis-aligned lines (< 0.5 pixel deviation)
+            # This removes diagonal lines that would clutter visualization without contributing to partitions
+            axis_aligned_lines = []
+            for line in trimmed_lines:
+                (x1, y1), (x2, y2) = line
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+                # Require nearly perfect alignment (< 0.5 pixel deviation)
+                if (dx > dy and dy < 0.5) or (dy > dx and dx < 0.5):
+                    axis_aligned_lines.append(line)
+            trimmed_lines = axis_aligned_lines
+            print(f"  After filtering to axis-aligned: {len(trimmed_lines)} lines remain")
+
             # Detect curves from the corner region (curves are localized, not full-image features)
             detected_curves = []
             try:
