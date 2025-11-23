@@ -139,6 +139,23 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                     _, ext_x2, ext_y2 = t_values[-1]
                     extended_lines.append(((ext_x1, ext_y1), (ext_x2, ext_y2)))
 
+            # Filter lines to only those that pass through the watermark region (corner 0-100)
+            # A line passes through if it crosses the region or has both endpoints inside
+            filtered_lines = []
+            for line in extended_lines:
+                (x1, y1), (x2, y2) = line
+
+                # Check if line segment intersects the 0-100 x 0-100 region
+                # Use a simple bounding box check first
+                min_x, max_x = min(x1, x2), max(x1, x2)
+                min_y, max_y = min(y1, y2), max(y1, y2)
+
+                # Line must overlap with [0, 100] in both dimensions
+                if max_x >= 0 and min_x <= 100 and max_y >= 0 and min_y <= 100:
+                    filtered_lines.append(line)
+
+            extended_lines = filtered_lines
+
             # Trim lines to stop at their first intersection from each endpoint
             def line_intersection(line1, line2):
                 """Find intersection point of two lines with parametric t value."""
@@ -954,8 +971,11 @@ def create_partitions(watermark_mask, lines, curves):
         (x1_1, y1_1), (x2_1, y2_1) = line1
         dx1 = abs(x2_1 - x1_1)
         dy1 = abs(y2_1 - y1_1)
-        is_h1 = dx1 > dy1
-        is_v1 = dy1 > dx1
+        # For rectangle detection, require nearly perfect axis alignment
+        # to avoid noise from edge detection creating spurious rectangles
+        # Require < 0.5 pixel deviation (essentially zero with floating point tolerance)
+        is_h1 = dx1 > dy1 and dy1 < 0.5
+        is_v1 = dy1 > dx1 and dx1 < 0.5
 
         for j, line2 in enumerate(lines):
             if i >= j:
@@ -963,8 +983,9 @@ def create_partitions(watermark_mask, lines, curves):
             (x1_2, y1_2), (x2_2, y2_2) = line2
             dx2 = abs(x2_2 - x1_2)
             dy2 = abs(y2_2 - y1_2)
-            is_h2 = dx2 > dy2
-            is_v2 = dy2 > dx2
+            # For rectangle detection, require nearly perfect axis alignment
+            is_h2 = dx2 > dy2 and dy2 < 0.5
+            is_v2 = dy2 > dx2 and dx2 < 0.5
 
             # Check if perpendicular
             if not ((is_h1 and is_v2) or (is_v1 and is_h2)):
