@@ -163,6 +163,7 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
             # Separate and sort lines for proper pairing
             # Vertical lines (sorted by x-coordinate)
             # Horizontal lines (sorted by y-coordinate)
+            # Only include nearly axis-aligned lines (not diagonal) for L-shape pairing
             vertical_lines = []
             horizontal_lines = []
 
@@ -171,12 +172,16 @@ def detect_geometric_features(corner, watermark_mask, full_image=None):
                 dx = abs(x2 - x1)
                 dy = abs(y2 - y1)
 
+                # Only include lines that are strongly axis-aligned for L-shape pairing
+                # Require at least 5:1 ratio (roughly 11 degrees from axis)
                 if dy > dx:  # Vertical
-                    x_avg = (x1 + x2) / 2
-                    vertical_lines.append((x_avg, line))
+                    if dy > 5 * dx:  # Strongly vertical
+                        x_avg = (x1 + x2) / 2
+                        vertical_lines.append((x_avg, line))
                 elif dx > dy:  # Horizontal
-                    y_avg = (y1 + y2) / 2
-                    horizontal_lines.append((y_avg, line))
+                    if dx > 5 * dy:  # Strongly horizontal
+                        y_avg = (y1 + y2) / 2
+                        horizontal_lines.append((y_avg, line))
 
             # Sort: vertical by x (left to right), horizontal by y (top to bottom)
             vertical_lines.sort(key=lambda t: t[0])
@@ -1181,14 +1186,15 @@ def create_partitions(watermark_mask, lines, curves):
         # For rectangular partitions from nested L-shapes, don't merge even if empty
         # They represent conceptual regions for color sampling even if watermark doesn't overlap
         # Only merge if they came from connected components (have very few pixels)
-        rectangular_partition_count = len(nested_rectangles)
+        # Use partition_to_rectangle mapping to identify ALL rectangular partitions (including curve-split sub-partitions)
+        rectangular_partition_ids = set(partition_to_rectangle.keys())
 
         # Merge partitions smaller than threshold
-        # But skip the first rectangular_partition_count partitions (keep nested rectangles)
+        # But skip rectangular partitions (keep nested rectangles and their sub-partitions)
         small_threshold = 50
         for small_pid in range(num_partitions):
             # Don't merge rectangular partitions (even if empty/small)
-            if small_pid < rectangular_partition_count:
+            if small_pid in rectangular_partition_ids:
                 continue
 
             if partition_sizes[small_pid] >= small_threshold:
@@ -1209,9 +1215,9 @@ def create_partitions(watermark_mask, lines, curves):
                 partition_sizes[most_common_neighbor] += partition_sizes[small_pid]
                 partition_sizes[small_pid] = 0
 
-        # Keep all rectangular partitions plus non-empty others
-        # Don't compact/renumber so rectangular partitions keep their IDs
-        num_partitions = max(partition_map[partition_map >= 0]) + 1 if np.any(partition_map >= 0) else 0
+        # Don't compact/renumber - keep all partition IDs up to the highest created
+        # This ensures dilation phase processes ALL partitions, including empty ones
+        # (Empty rectangular partitions may gain pixels during dilation)
 
     # Handle barrier pixels: assign them to nearest partition
     # Only for connected components approach, NOT for rectangular partitions
@@ -1405,6 +1411,9 @@ def create_partitions(watermark_mask, lines, curves):
                     # Lines at rect_x, rect_y run BETWEEN pixels, so x >= rect_x means outside
                     if px >= rect_x or py >= rect_y:
                         return False  # Pixel is outside outer rectangle - reject
+                else:
+                    # Partition not in mapping (e.g., outer partition) - allow it
+                    pass
 
                 return True
 
